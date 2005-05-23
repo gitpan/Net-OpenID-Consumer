@@ -26,11 +26,19 @@ sub new {
 
 sub claimed_url {
     my Net::OpenID::ClaimedIdentity $self = shift;
+    Carp::croak("Too many parameters") if @_;
     return $self->{'identity'};
+}
+
+sub identity_server {
+    my Net::OpenID::ClaimedIdentity $self = shift;
+    Carp::croak("Too many parameters") if @_;
+    return $self->{consumer}->_pick_identity_server($self->{servers});
 }
 
 sub identity_servers {
     my Net::OpenID::ClaimedIdentity $self = shift;
+    Carp::croak("Too many parameters") if @_;
     return @{ $self->{'servers'} };
 }
 

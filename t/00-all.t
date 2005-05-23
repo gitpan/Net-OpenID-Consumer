@@ -7,20 +7,21 @@ use Net::OpenID::Consumer;
 
 my ($query_string, %get_vars);
 
-my $csr = Net::OpenID::Consumer->new;
-$csr->args(\%get_vars);
+my $csr = Net::OpenID::Consumer->new(
+                                     args => \%get_vars,
+                                     );
 
 # $csr->nonce_generator(sub { rand(5000); });
 # $csr->nonce_checker(sub { return 1; });
 # $csr->identity_cache(sub { return 1; });
 # $csr->web_cache(sub { return 1; });
 
-my $ident = $csr->get_claimed_identity(" sdlkj lskdj 3");
+my $ident = $csr->claimed_identity(" sdlkj lskdj 3");
 ok(! $ident);
 ok( $csr->json_err =~ /url_fetch_error/);
 
 
-$ident = $csr->get_claimed_identity("bradfitz.com")
+$ident = $csr->claimed_identity("bradfitz.com")
     or die $csr->err . ": " . $csr->errtext;
 
 ok($ident->claimed_url eq "http://bradfitz.com/");

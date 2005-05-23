@@ -8,15 +8,15 @@ use LWP::UserAgent;
 package Net::OpenID::Consumer;
 
 use vars qw($VERSION $HAS_CRYPT_DSA $HAS_CRYPT_OPENSSL $HAS_OPENSSL);
-$VERSION = "0.02";
+$VERSION = "0.03";
 
 use fields (
             'cacher',         # the Net::OpenID::Cacher::* class to remember mapping of OpenID -> Identity Server
             'ua',             # LWP::UserAgent instance to use
             'args',           # how to get at your args
             'server_selector',# optional subref that will pick which identity server to use, if multiple 
-            'last_errcode', # last error code we got
-            'last_errtext', # last error code we got
+            'last_errcode',   # last error code we got
+            'last_errtext',   # last error code we got
             );
 
 use Net::OpenID::ClaimedIdentity;
@@ -38,11 +38,14 @@ sub new {
     my Net::OpenID::Consumer $self = shift;
     $self = fields::new( $self ) unless ref $self;
     my %opts = @_;
+
     $self->{cacher} = undef;
     $self->{ua} = delete $opts{ua};
+    $self->args(delete $opts{args});
+
     $self->{last_errcode} = undef;
     $self->{last_errtext} = undef;
-    $self->{args} = delete $opts{args};
+
     Carp::croak("Unknown options: " . join(", ", keys %opts)) if %opts;
     return $self;
 }
@@ -66,6 +69,7 @@ sub args {
     my Net::OpenID::Consumer $self = shift;
 
     if (my $what = shift) {
+        Carp::croak("Too many parameters") if @_;
         my $getter;
         if (! ref $what){
             Carp::croak("No args defined") unless $self->{args};
@@ -81,9 +85,8 @@ sub args {
             $getter = sub { scalar $what->param($_[0]); };
         } elsif (ref $what eq "CODE") {
             $getter = $what;
-        } elsif (ref $what) {
-            Carp::croak("Unknown parameter type ($what)");
         } else {
+            Carp::croak("Unknown parameter type ($what)");
         }
         if ($getter) {
             $self->{args} = $getter;
@@ -96,6 +99,7 @@ sub server_selector {
     my Net::OpenID::Consumer $self = shift;
     if (@_) {
         my $code = shift;
+        Carp::croak("Too many parameters") if @_;
         Carp::croak("Not a CODE ref") unless ref $code eq "CODE";
         $self->{server_selector} = $code;
     }
@@ -105,6 +109,7 @@ sub server_selector {
 sub ua {
     my Net::OpenID::Consumer $self = shift;
     $self->{ua} = shift if @_;
+    Carp::croak("Too many parameters") if @_;
 
     # make default one on first access
     unless ($self->{ua}) {
@@ -200,9 +205,10 @@ sub _find_openid_servers {
 }
 
 # returns Net::OpenID::ClaimedIdentity
-sub get_claimed_identity {
+sub claimed_identity {
     my Net::OpenID::Consumer $self = shift;
-    my ($url) = @_;
+    my $url = shift;
+    Carp::croak("Too many parameters") if @_;
 
     # trim whitespace
     $url =~ s/^\s+//;
@@ -229,12 +235,16 @@ sub get_claimed_identity {
 
 sub user_setup_url {
     my Net::OpenID::Consumer $self = shift;
+    Carp::croak("Too many parameters") if @_;
+
     return $self->_fail("bad_mode") unless $self->args("openid.mode") eq "id_res";
     return $self->args("openid.user_setup_url");
 }
 
 sub verified_identity {
     my Net::OpenID::Consumer $self = shift;
+    Carp::croak("Too many parameters") if @_;
+
     return $self->_fail("bad_mode") unless $self->args("openid.mode") eq "id_res";
 
     my $sig64 = $self->args("openid.sig")             or return $self->_fail("no_sig");
@@ -430,7 +440,7 @@ Net::OpenID::Consumer - library for consumers of OpenID identities
   # step is to fetch that page, parse it, and get a
   # Net::OpenID::ClaimedIdentity object:
 
-  my $claimed_identity = $csr->get_claimed_identity("bradfitz.com");
+  my $claimed_identity = $csr->claimed_identity("bradfitz.com");
 
   # now your app has to send them at their identity server's endpoint
   # to get redirected to either a positive assertion that they own
@@ -518,7 +528,7 @@ my $code = $csr->args;
 Without arguments, returns a subref that returns the value given a
 parameter name.
 
-=item $csr->B<get_claimed_identity>($url)
+=item $csr->B<claimed_identity>($url)
 
 Given a user-entered $url (which could be missing http://, or have
 extra whitespace, etc), returns either a Net::OpenID::ClaimedIdentity

@@ -1,3 +1,14 @@
+0.03:
+        * setting args in constructor was broken
+
+        * renamed get_claimed_identity to just claimed_identity to be
+          consistent
+
+	* all methods now croak if called with too many arguments
+
+	* added ClaimedIdentity->identity_server to get just one,
+	  as selected by plugin, instead of array of them all
+
 0.02:
 	* POD docs for Net/OpenID/Consumer.pm
 
