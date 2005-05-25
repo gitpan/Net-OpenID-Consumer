@@ -8,7 +8,7 @@ use LWP::UserAgent;
 package Net::OpenID::Consumer;
 
 use vars qw($VERSION $HAS_CRYPT_DSA $HAS_CRYPT_OPENSSL $HAS_OPENSSL);
-$VERSION = "0.03";
+$VERSION = "0.04";
 
 use fields (
             'cacher',         # the Net::OpenID::Cacher::* class to remember mapping of OpenID -> Identity Server
@@ -177,7 +177,7 @@ sub _pick_identity_server {
     return $id_server_list->[0];
 }
 
-sub _find_openid_servers {
+sub _find_semantic_info {
     my Net::OpenID::Consumer $self = shift;
     my $url = shift;
     my $final_url_ref = shift;
@@ -185,23 +185,99 @@ sub _find_openid_servers {
     my $doc = $self->_get_url_contents($url, $final_url_ref) or
         return;
 
-    # find <head> content of document (notably: the first head, if
-    # there are multiple from attackers)
+    # trim everything past the body.  this is in case the user doesn't
+    # have a head document and somebody was able to inject their own
+    # head.  -- brad choate
+    $doc =~ s/<body\b.*//is;
+
+    # find <head> content of document (notably: the first head, if an attacker
+    # has added others somehow)
     return $self->_fail("no_head_tag", "Couldn't find OpenID servers due to no head tag")
-        unless $doc =~ m!<head[^>]*>(.*)</head>!is;
+        unless $doc =~ m!<head[^>]*>(.*?)</head>!is;
     my $head = $1;
 
-    my @id_servers;
-    while ($head =~ m!<link([^>]+)>!g) {
-        my $link = $1;
-        if ($link =~ /rel=.openid\.server./i &&
-            $link =~ m!href=[\"\']([^\"\']+)[\"\']!i) {
-            push @id_servers, $1;
+    my $ret = {
+        'openid.server' => [],
+        'foaf' => undef,
+        'foaf.maker' => undef,
+        'rss' => undef,
+        'atom' => undef,
+    };
+
+    # analyze link/meta tags
+    while ($head =~ m!<(link|meta)\b([^>]+)>!g) {
+        my ($type, $val) = ($1, $2);
+
+        # OpenID servers
+        # <link rel="openid.server" href="http://www.livejournal.com/misc/openid.bml" />
+        if ($type eq "link" &&
+            $val =~ /rel=.openid\.server./i &&
+            $val =~ m!href=[\"\']([^\"\']+)[\"\']!i) {
+            push @{ $ret->{"openid.server"} }, $1;
+            next;
+        }
+
+        # FOAF documents
+        #<link rel="meta" type="application/rdf+xml" title="FOAF" href="http://brad.livejournal.com/data/foaf" />
+        if ($type eq "link" &&
+            $val =~ m!title=.foaf.!i &&
+            $val =~ m!rel=.meta.!i &&
+            $val =~ m!type=.application/rdf\+xml.!i &&
+            $val =~ m!href=[\"\']([^\"\']+)[\"\']!i) {
+            $ret->{"foaf"} = $1;
+            next;
+        }
+
+        # FOAF maker info
+        # <meta name="foaf:maker" content="foaf:mbox_sha1sum '4caa1d6f6203d21705a00a7aca86203e82a9cf7a'" />
+        if ($type eq "meta" &&
+            $val =~ m!name=.foaf:maker.!i &&
+            $val =~ m!content=([\'\"])(.*?)\1!i) {
+            $ret->{"foaf.maker"} = $2;
+            next;
+        }
+
+        if ($type eq "meta" &&
+            $val =~ m!name=.foaf:maker.!i &&
+            $val =~ m!content=([\'\"])(.*?)\1!i) {
+            $ret->{"foaf.maker"} = $2;
+            next;
+        }
+
+        # RSS
+        # <link rel="alternate" type="application/rss+xml" title="RSS" href="http://www.livejournal.com/~brad/data/rss" />
+        if ($type eq "link" &&
+            $val =~ m!rel=.alternate.!i &&
+            $val =~ m!type=.application/rss\+xml.!i &&
+            $val =~ m!href=[\"\']([^\"\']+)[\"\']!i) {
+            $ret->{"rss"} = $1;
+            next;
+        }
+
+        # Atom
+        # <link rel="alternate" type="application/atom+xml" title="Atom" href="http://www.livejournal.com/~brad/data/rss" />
+        if ($type eq "link" &&
+            $val =~ m!rel=.alternate.!i &&
+            $val =~ m!type=.application/atom\+xml.!i &&
+            $val =~ m!href=[\"\']([^\"\']+)[\"\']!i) {
+            $ret->{"atom"} = $1;
+            next;
         }
     }
 
-    return $self->_fail("no_identity_servers") unless @id_servers;
-    @id_servers;
+    return $ret;
+}
+
+sub _find_openid_servers {
+    my Net::OpenID::Consumer $self = shift;
+    my $url = shift;
+    my $final_url_ref = shift;
+
+    my $sem_info = $self->_find_semantic_info($url, $final_url_ref) or
+        return;
+
+    return $self->_fail("no_identity_servers") unless @{ $sem_info->{"openid.server"} || [] };
+    @{ $sem_info->{"openid.server"} };
 }
 
 # returns Net::OpenID::ClaimedIdentity
@@ -213,11 +289,11 @@ sub claimed_identity {
     # trim whitespace
     $url =~ s/^\s+//;
     $url =~ s/\s+$//;
-    return helper_error("empty_url", "Empty URL") unless $url;
+    return $self->_fail("empty_url", "Empty URL") unless $url;
 
     # do basic canonicalization
     $url = "http://$url" if $url && $url !~ m!^\w+://!;
-    return helper_error("bogus_url", "Invalid URL") unless $url =~ m!^http://!;
+    return $self->_fail("bogus_url", "Invalid URL") unless $url =~ m!^http://!;
     # add a slash, if none exists
     $url .= "/" unless $url =~ m!^http://.+/!;
 
@@ -235,10 +311,17 @@ sub claimed_identity {
 
 sub user_setup_url {
     my Net::OpenID::Consumer $self = shift;
-    Carp::croak("Too many parameters") if @_;
-
+    my %opts = @_;
+    my $post_grant = delete $opts{'post_grant'};
+    Carp::croak("Unknown options: " . join(", ", keys %opts)) if %opts;
     return $self->_fail("bad_mode") unless $self->args("openid.mode") eq "id_res";
-    return $self->args("openid.user_setup_url");
+
+    my $setup_url = $self->args("openid.user_setup_url");
+
+    OpenID::util::push_url_arg(\$setup_url, "openid.post_grant", $post_grant)
+        if $post_grant;
+
+    return $setup_url;
 }
 
 sub verified_identity {
@@ -269,7 +352,9 @@ sub verified_identity {
     # re-fetch (possibly from cache) the page, re-find the acceptable
     # identity servers for this user, and get the public key
     my $final_url;
-    my @id_servers = $self->_find_openid_servers($url, \$final_url)
+    my $sem_info = $self->_find_semantic_info($url, \$final_url);
+
+    my @id_servers = @{ $sem_info->{"openid.server"} || {} }
         or return undef;
 
     return $self->_fail("identity_changed_on_fetch")
@@ -298,7 +383,12 @@ sub verified_identity {
 
     # FIXME: nonce callback
     return Net::OpenID::VerifiedIdentity->new(
-                                              identity => $url,
+                                              identity  => $url,
+                                              foaf      => $sem_info->{"foaf"},
+                                              foafmaker => $sem_info->{"foaf.maker"},
+                                              rss       => $sem_info->{"rss"},
+                                              atom      => $sem_info->{"atom"},
+                                              consumer  => $self,
                                               );
 }
 
@@ -412,6 +502,19 @@ sub eurl
     $a =~ s/([^a-zA-Z0-9_\,\-.\/\\\: ])/uc sprintf("%%%02x",ord($1))/eg;
     $a =~ tr/ /+/;
     return $a;
+}
+
+sub push_url_arg {
+    my $uref = shift;
+    $$uref =~ s/[&?]$//;
+    my $got_qmark = ($$uref =~ /\?/);
+
+    while (@_) {
+        my $key = shift;
+        my $value = shift;
+        $$uref .= $got_qmark ? "&" : ($got_qmark = 0, "?");
+        $$uref .= eurl($key) . "=" . eurl($value);
+    }
 }
 
 __END__
@@ -537,13 +640,30 @@ object, or undef on failure.
 Note that this identity is NOT verified yet.  It's only who the user
 claims they are, but they could be lying.
 
-=item $csr->B<user_setup_url>
+=item $csr->B<user_setup_url>( [ %opts ] )
 
 Returns the URL the user must return to in order to login, setup trust,
 or do whatever the identity server needs them to do in order to make
 the identity assertion which they previously initiated by entering
 their claimed identity URL.  Returns undef if this setup URL isn't
-required, in which case you should ask for the verified_identity
+required, in which case you should ask for the verified_identity.
+
+The base URL this this function returns can be modified by using the
+following options in %opts:
+
+=over
+
+=item C<post_grant>
+
+What you're asking the identity server to do with the user after they
+setup trust.  Can be either C<return> or C<close> to return the user
+back to the return_to URL, or close the browser window with
+JavaScript.  If you don't specify, the behavior is undefined (probably
+the user gets a dead-end page with a link back to the return_to URL).
+In any case, the identity server can do whatever it wants, so don't
+depend on this.
+
+=back
 
 =item $csr->B<verified_identity>
 
@@ -560,7 +680,7 @@ server_selector is declared, the first is always chosen.
 
 =item $csr->B<err>
 
-Returns the last error, in form "errcode: errtext";
+Returns the last error, in form "errcode: errtext"
 
 =item $csr->B<errcode>
 
@@ -569,10 +689,6 @@ Returns the last error code.
 =item $csr->B<errtext>
 
 Returns the last error text.
-
-=item $csr->B<json_err>
-
-Returns the last error code/text in JSON format.
 
 =item $csr->B<json_err>
 
@@ -597,6 +713,12 @@ This is free software. IT COMES WITHOUT WARRANTY OF ANY KIND.
 =head1 SEE ALSO
 
 OpenID website:  http://www.danga.com/openid/
+
+L<Net::OpenID::ClaimedIdentity> -- part of this module
+
+L<Net::OpenID::VerifiedIdentity> -- part of this module
+
+L<Net::OpenID::Server> -- another module, for acting like an OpenID server
 
 =head1 AUTHORS
 

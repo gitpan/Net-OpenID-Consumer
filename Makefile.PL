@@ -5,6 +5,7 @@ WriteMakefile( 'NAME' => 'Net::OpenID::Consumer',
                    'LWP::UserAgent' => 0,
                    'MIME::Base64'   => 0,
                    'Digest::SHA1'   => 0,
+                   'URI'            => 0,
                },
                ($] >= 5.005 ?
                 (ABSTRACT_FROM => 'lib/Net/OpenID/Consumer.pm',

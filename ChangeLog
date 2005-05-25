@@ -1,3 +1,18 @@
+0.04:
+        * tons more docs:  in both ClaimedIdentity and VerifiedIdentity
+
+	* Consumer now observes atom/rss/foaf/foafmaker at the same time
+	  as openid.server, and passes it along to VerifiedIdentity,
+	  where it's accessible, and VerifiedIdentity knows whether or
+	  not those urls are under the trusted one or not, and makes them
+	  differently available to callers
+
+	* bug fixes, doc fixes
+
+	* post_grant moved to user_setup_url, not check_url
+
+	* delayed_return added to check_url
+
 0.03:
         * setting args in constructor was broken
 
