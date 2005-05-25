@@ -8,7 +8,7 @@ use LWP::UserAgent;
 package Net::OpenID::Consumer;
 
 use vars qw($VERSION $HAS_CRYPT_DSA $HAS_CRYPT_OPENSSL $HAS_OPENSSL);
-$VERSION = "0.04";
+$VERSION = "0.05";
 
 use fields (
             'cacher',         # the Net::OpenID::Cacher::* class to remember mapping of OpenID -> Identity Server
@@ -512,7 +512,7 @@ sub push_url_arg {
     while (@_) {
         my $key = shift;
         my $value = shift;
-        $$uref .= $got_qmark ? "&" : ($got_qmark = 0, "?");
+        $$uref .= $got_qmark ? "&" : ($got_qmark = 1, "?");
         $$uref .= eurl($key) . "=" . eurl($value);
     }
 }
@@ -551,7 +551,6 @@ Net::OpenID::Consumer - library for consumers of OpenID identities
 
   my $check_url = $claimed_identity->check_url(
     return_to  => "http://example.com/openid-check.app?yourarg=val",
-    post_grant => "close",
     trust_root => "http://example.com/",
   );
 

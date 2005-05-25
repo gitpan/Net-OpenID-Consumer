@@ -1,3 +1,8 @@
+0.05:
+        * stupid push_url_arg bugfix
+
+	* doc fix in example code (no post_grant in check_url)
+
 0.04:
         * tons more docs:  in both ClaimedIdentity and VerifiedIdentity
 
