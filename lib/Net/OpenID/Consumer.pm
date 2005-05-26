@@ -3,20 +3,22 @@
 use strict;
 use Carp ();
 use LWP::UserAgent;
+use URI::Fetch '0.02';
 
 ############################################################################
 package Net::OpenID::Consumer;
 
 use vars qw($VERSION $HAS_CRYPT_DSA $HAS_CRYPT_OPENSSL $HAS_OPENSSL);
-$VERSION = "0.05";
+$VERSION = "0.06";
 
 use fields (
-            'cacher',         # the Net::OpenID::Cacher::* class to remember mapping of OpenID -> Identity Server
+            'cache',          # the Cache object sent to URI::Fetch
             'ua',             # LWP::UserAgent instance to use
             'args',           # how to get at your args
             'server_selector',# optional subref that will pick which identity server to use, if multiple 
             'last_errcode',   # last error code we got
             'last_errtext',   # last error code we got
+            'tmpdir',        # temporary directory to write files to
             );
 
 use Net::OpenID::ClaimedIdentity;
@@ -26,9 +28,12 @@ use Digest::SHA1 ();
 
 BEGIN {
     unless ($HAS_CRYPT_OPENSSL = eval "use Crypt::OpenSSL::DSA 0.12; 1;") {
-        unless ($HAS_CRYPT_DSA = eval "die 'FIXME_BELOW'; use Crypt::DSA (); use Convert::PEM; 1;") {
+        unless ($HAS_CRYPT_DSA = eval "use Crypt::DSA 0.13 (); use Convert::PEM 0.07; 1;") {
             unless ($HAS_OPENSSL = `which openssl`) {
-                die "Net::OpenID::Consumer failed to load, due to missing dependencies.  You to have Crypt::OpenSSL::DSA -or- the binary 'openssl' in your path.";
+                die "Net::OpenID::Consumer failed to load, due to missing dependencies.  You to have ".
+                    "Crypt::OpenSSL::DSA (0.12+) -or- ".
+                    "Crypt::DSA (0.13+) -or- ".
+                    "the binary 'openssl' in your path.";
             }
         }
     }
@@ -39,21 +44,30 @@ sub new {
     $self = fields::new( $self ) unless ref $self;
     my %opts = @_;
 
-    $self->{cacher} = undef;
     $self->{ua} = delete $opts{ua};
-    $self->args(delete $opts{args});
-
-    $self->{last_errcode} = undef;
-    $self->{last_errtext} = undef;
+    $self->args  (delete $opts{args}  );
+    $self->cache (delete $opts{cache} );
+    $self->tmpdir(delete $opts{tmpdir});
 
     Carp::croak("Unknown options: " . join(", ", keys %opts)) if %opts;
     return $self;
 }
 
-sub cacher {
+sub cache {
     my Net::OpenID::Consumer $self = shift;
-    $self->{cacher} = shift if @_;
-    $self->{cacher};
+    $self->{cache} = shift if @_;
+    $self->{cache};
+}
+
+sub tmpdir {
+    my Net::OpenID::Consumer $self = shift;
+    if (@_ && $_[0]) {
+        my $dir = shift;
+        Carp::croak("Too many parameters") if @_;
+        Carp::croak("Not a directory") unless -d $dir;
+        $self->{tmpdir} = $dir;
+    }
+    $self->{tmpdir};
 }
 
 # given something that can have GET arguments, returns a subref to get them:
@@ -150,19 +164,48 @@ sub errtext {
     $self->{last_errtext};
 }
 
+sub _get_publickey {
+    my Net::OpenID::Consumer $self = shift;
+    my ($key_url, $mode) = @_;
+
+    my $cache = $self->cache;
+
+    if ($mode eq "cache") {
+        return undef unless $cache;
+        return $cache->get($key_url);
+    } elsif ($mode eq "network") {
+        my $res = $self->ua->get($key_url);
+        if ($res && $res->is_success) {
+            my $pem = $res->content;
+            $cache->set($key_url, $pem) if $pem;
+            return $pem;
+        }
+        return undef;
+    }
+    die;
+}
+
 sub _get_url_contents {
     my Net::OpenID::Consumer $self = shift;
-    my $url = shift;
-    my $final_url_ref = shift;
+    my  ($url, $final_url_ref, $hook) = @_;
+    $final_url_ref ||= do { my $dummy; \$dummy; };
 
-    # FIXME: use cacher
+    my $ures = URI::Fetch->fetch($url,
+                                 UserAgent        => $self->ua,
+                                 Cache            => $self->cache,
+                                 ContentAlterHook => $hook,
+                                 )
+        or return $self->_fail("url_fetch_error", "Error fetching URL: " . URI::Fetch->errstr);
 
-    my $res = $self->ua->get($url);
-    if ($res->is_success) {
-        $$final_url_ref = $res->request->uri->as_string;
-        return $res->content;
+    # who actually uses HTTP gone response status?  uh, nobody.
+    if ($ures->status == URI::Fetch::URI_GONE()) {
+        return $self->_fail("url_gone", "URL is no longer available");
     }
-    return $self->_fail("url_fetch_error", "Error fetching URL: " . $res->status_line);
+
+    my $res = $ures->http_response;
+    $$final_url_ref = $res->request->uri->as_string;
+
+    return $ures->content;
 }
 
 sub _pick_identity_server {
@@ -182,13 +225,16 @@ sub _find_semantic_info {
     my $url = shift;
     my $final_url_ref = shift;
 
-    my $doc = $self->_get_url_contents($url, $final_url_ref) or
-        return;
+    my $trim_hook = sub {
+        my $htmlref = shift;
+        # trim everything past the body.  this is in case the user doesn't
+        # have a head document and somebody was able to inject their own
+        # head.  -- brad choate
+        $$htmlref =~ s/<body\b.*//is;
+    };
 
-    # trim everything past the body.  this is in case the user doesn't
-    # have a head document and somebody was able to inject their own
-    # head.  -- brad choate
-    $doc =~ s/<body\b.*//is;
+    my $doc = $self->_get_url_contents($url, $final_url_ref, $trim_hook) or
+        return;
 
     # find <head> content of document (notably: the first head, if an attacker
     # has added others somehow)
@@ -319,7 +365,7 @@ sub user_setup_url {
     my $setup_url = $self->args("openid.user_setup_url");
 
     OpenID::util::push_url_arg(\$setup_url, "openid.post_grant", $post_grant)
-        if $post_grant;
+        if $setup_url && $post_grant;
 
     return $setup_url;
 }
@@ -354,7 +400,7 @@ sub verified_identity {
     my $final_url;
     my $sem_info = $self->_find_semantic_info($url, \$final_url);
 
-    my @id_servers = @{ $sem_info->{"openid.server"} || {} }
+    my @id_servers = @{ $sem_info->{"openid.server"} || [] }
         or return undef;
 
     return $self->_fail("identity_changed_on_fetch")
@@ -374,14 +420,24 @@ sub verified_identity {
     my $msg = Digest::SHA1::sha1($msg_plain);
     my $sig = MIME::Base64::decode_base64($sig64);
 
-    # TODO: foreach my $mode ("cached", "no_cache")
-    my $public_pem = $self->_get_url_contents($pem_url)
-        or return $self->_fail("public_key_fetch_error", "Details: " . $self->err);
+    # try to check the public key both from our cached key, if
+    # present, and then later from the network (which will also end up
+    # caching it)
+    my $verify_okay = 0;
+    foreach my $mode ("cache", "network") {
+        my $public_pem = $self->_get_publickey($pem_url, $mode);
+        unless ($public_pem) {
+            $self->_fail("public_key_fetch_error", "Couldn't get public key from $mode");
+            next;
+        }
+        $verify_okay = $self->_dsa_verify($public_pem, $sig, $msg, $msg_plain);
+        last if $verify_okay;
+    }
+    return undef unless $verify_okay;
 
-    $self->_dsa_verify($public_pem, $sig, $msg, $msg_plain)
-        or return undef;
+    # TODO: nonce callback?
 
-    # FIXME: nonce callback
+    # verified!
     return Net::OpenID::VerifiedIdentity->new(
                                               identity  => $url,
                                               foaf      => $sem_info->{"foaf"},
@@ -398,53 +454,54 @@ sub _dsa_verify {
     if ($HAS_CRYPT_OPENSSL) {
         my $dsa_pub  = Crypt::OpenSSL::DSA->read_pub_key_str($public_pem)
             or $self->_fail("pubkey_parse_error", "Couldn't parse public key");
-        $dsa_pub->verify($msg, $sig)
-            or return $self->_fail("verify_failed", "DSA signature verification failed");
+        my $good = eval { $dsa_pub->verify($msg, $sig) };
+        return $self->_fail("verify_failed", "DSA signature verification failed") unless $good;
         return 1;
     }
 
     if ($HAS_CRYPT_DSA) {
+        # Crypt::DSA (as of 0.13) has the odd requirement that it'll only
+        # parse ASN.1-encoded objects if they're also base64-encoded
+        my $sig64 = MIME::Base64::encode_base64($sig);
+
+        my $sigobj = eval { Crypt::DSA::Signature->new(Content => $sig64) }
+            or $self->_fail("sig_parse_error", "Failed to parse DSA signature");
+
+        my $key =  eval {
+            Crypt::DSA::Key->new(
+                                 Type => "PEM",
+                                 Content => $public_pem,
+                                 )
+            }
+        or return $self->_fail("pubkey_parse_error", "Couldn't generate Crypt::DSA::Key from PEM");
+
         my $cd = Crypt::DSA->new;
-
-        my ($len, $len_r, $len_s, $r, $s);
-        unless ($sig =~ /^\x30/ &&
-                ($len = ord(substr($sig,1,1))) &&
-                substr($sig,2,1) eq "\x02" &&
-                ($len_r =  ord(substr($sig,3,1))) &&
-                ($r = substr($sig,4,$len_r)) &&
-                substr($sig,4+$len_r,1) eq "\x02" &&
-                ($len_s =  ord(substr($sig,5+$len_r,1))) &&
-                ($s = substr($sig,6+$len_r,$len_s))) {
-            return $self->_fail("asn1_parse_error", "Failed to parse ASN.1 signature");
-        }
-
-        my $sigobj = Crypt::DSA::Signature->new;
-        $sigobj->r("0x" . unpack("H40", $r));
-        $sigobj->s("0x" . unpack("H40", $s));
-
-
-        die "#### FIXME: Crypt::DSA::Key only parses private keys.  Need to fix it.";
-
-        my $key =  Crypt::DSA::Key->new(
-                                        Type => "PEM",
-                                        Content => $public_pem,
-                                        )
-            or return $self->_fail("pubkey_parse_error", "Couldn't generate Crypt::DSA::Key from PEM");
-
-        $cd->verify(
-                    Digest    => $msg,
-                    Signature => $sigobj,
-                    Key       => $key,
-                    )
-            or return $self->_fail("verify_failed", "DSA signature verification failed");
+        my $good = eval {
+            $cd->verify(
+                        Digest    => $msg,
+                        Signature => $sigobj,
+                        Key       => $key,
+                        )
+            };
+        return $self->_fail("verify_failed", "DSA signature verification failed") unless $good;
         return 1;
     }
 
     if ($HAS_OPENSSL) {
         require File::Temp;
-        my $sig_temp = new File::Temp(TEMPLATE => "tmp.signatureXXXX") or die;
-        my $pub_temp = new File::Temp(TEMPLATE => "tmp.pubkeyXXXX") or die;
-        my $msg_temp = new File::Temp(TEMPLATE => "tmp.msgXXXX") or die;
+        my $sig_temp = eval { File::Temp->new(DIR => $self->tmpdir, TEMPLATE => "tmp.signatureXXXX") };
+
+        # if temporary file creation failed, and they haven't set a tmpdir, try /tmp/ for them
+        if (! $sig_temp) {
+            print "  err: $@\n";
+            if (! $self->tmpdir) {
+                $self->tmpdir("/tmp/");
+                $sig_temp = File::Temp(DIR => $self->tmpdir, TEMPLATE => "tmp.signatureXXXX") or die;
+            }
+        }
+
+        my $pub_temp = new File::Temp(DIR => $self->tmpdir, TEMPLATE => "tmp.pubkeyXXXX") or die;
+        my $msg_temp = new File::Temp(DIR => $self->tmpdir, TEMPLATE => "tmp.msgXXXX") or die;
         syswrite($sig_temp,$sig);
         syswrite($pub_temp,$public_pem);
         syswrite($msg_temp,$msg_plain);
@@ -453,8 +510,9 @@ sub _dsa_verify {
         return $self->_fail("no_openssl", "OpenSSL not available") unless defined $pid;
         my $line = <$fh>;
         close($fh);
-        return $self->_fail("verify_failed", "DSA signature verification failed") if $line =~ /Verification OK/;
-        return 1;
+        my $exit_error = $?;
+        return 1 if $line =~ /Verified OK/ && ! $exit_error;
+        return $self->_fail("verify_failed", "DSA signature verification failed");
 
         # More portable form, but spews to stdout:
         #my $rv = system("openssl", "dgst", "-dss1", "-verify", "$pub_temp", "-signature", "$sig_temp", "$msg_temp");
@@ -527,17 +585,11 @@ Net::OpenID::Consumer - library for consumers of OpenID identities
 
   use Net::OpenID::Consumer;
 
-  my $csr = Net::OpenID::Consumer->new;
-
-  # set the user-agent (defaults to LWP::UserAgent, which isn't safe)
-  $csr->ua(LWPx::ParanoidAgent->new);
-
-  # set how the consumer gets to your web environment's GET arguments
-  $csr->args(\%hash);   # hashref of get args/values
-  $csr->args($r);       # Apache
-  $csr->args($aprreq);  # Apache::Request
-  $csr->args($cgi);     # CGI.pm
-  $csr->args(sub {});   # subref that returns value, given arg
+  my $csr = Net::OpenID::Consumer->new(
+    ua    => LWPx::ParanoidAgent->new,
+    cache => Some::Cache->new,
+    args  => $cgi,
+  );
 
   # a user entered, say, "bradfitz.com" as their identity.  The first
   # step is to fetch that page, parse it, and get a
@@ -583,7 +635,8 @@ identity.  More information is available at:
 
 my $csr = Net::OpenID::Consumer->new([ %opts ]);
 
-You can set the C<ua> and C<args> in the constructor.
+You can set the C<ua>, C<cache>, C<args>, and C<tmpdir> in the
+constructor.  See the corresponding method descriptions below.
 
 =back
 
@@ -599,6 +652,19 @@ Getter/setter for the LWP::UserAgent (or subclass) instance which will
 be used when web donwloads are needed.  It's highly recommended that
 you use LWPx::ParanoidAgent, or at least read its documentation so
 you're aware of why you should care.
+
+=item $csr->B<cache>($cache)
+
+=item $csr->B<cache>
+
+Getter/setter for the optional (but recommended!) cache instance you
+want to use for storing fetched parts of pages.  (identity server
+public keys, and the E<lt>headE<gt> section of user's HTML pages)
+
+The $cache object can be anything that has a -E<gt>get($key) and
+-E<gt>set($key,$value) methods.  See L<URI::Fetch> for more
+information.  This cache object is just passed to L<URI::Fetch>
+directly.
 
 =item $csr->B<args>($ref)
 
@@ -693,6 +759,13 @@ Returns the last error text.
 
 Returns the last error code/text in JSON format.
 
+=item $csr->B<tmpdir>($dir)
+
+Set the temporary directory used if you don't have either Crypt::DSA
+or Crypt::OpenSSL::DSA installed and you're using the OpenSSL binaries
+to verify signatures.  Defaults to current working directory, and then
+/tmp.  You shouldn't need to override this in most cases.
+
 =back
 
 =head1 COPYRIGHT
@@ -722,4 +795,3 @@ L<Net::OpenID::Server> -- another module, for acting like an OpenID server
 =head1 AUTHORS
 
 Brad Fitzpatrick <brad@danga.com>
-

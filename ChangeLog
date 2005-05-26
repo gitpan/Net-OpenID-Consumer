@@ -1,3 +1,23 @@
+0.06:
+	* wrap Crypt::OpenSSL::DSA verify in eval {} as it can croak
+
+	* use URI::Fetch, which does caching and proper HTTP behavior
+
+	* let user get/set cache, which is then propogated down to URI::Fetch
+
+	* optionally use new pure-perl version of Crypt::DSA which now
+	  does ASN.1 serialization/deserialization in both signatures and
+	  public keys.  brings total options of DSA verify techniques up
+	  to 3.
+
+	* tmpdir option (and smart auto-configuration) for people using
+  	  OpenSSL binaries to verify signatures.
+
+	* security fix when doing DSA checks with system openssl binary
+	  (was previously parsing the wrong status)
+
+	* misc reported bugfixes
+
 0.05:
         * stupid push_url_arg bugfix
 
