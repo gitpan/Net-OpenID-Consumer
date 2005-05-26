@@ -1,3 +1,9 @@
+0.08:
+	* more openssl-binary temp file changes.  on second failure (which
+	  was previously missing a new method), it also propogates up the
+	  error message now, instead of dying, to be more consistent with
+	  the other DSA checkers, which never die
+
 0.07:
 	* bugfix: use URI::Fetch 0.02, not "0.02" in quotes
 

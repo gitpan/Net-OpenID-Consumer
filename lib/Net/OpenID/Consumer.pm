@@ -9,7 +9,7 @@ use URI::Fetch 0.02;
 package Net::OpenID::Consumer;
 
 use vars qw($VERSION $HAS_CRYPT_DSA $HAS_CRYPT_OPENSSL $HAS_OPENSSL);
-$VERSION = "0.07";
+$VERSION = "0.08";
 
 use fields (
             'cache',          # the Cache object sent to URI::Fetch
@@ -493,15 +493,17 @@ sub _dsa_verify {
 
         # if temporary file creation failed, and they haven't set a tmpdir, try /tmp/ for them
         if (! $sig_temp) {
-            print "  err: $@\n";
-            if (! $self->tmpdir) {
-                $self->tmpdir("/tmp/");
-                $sig_temp = File::Temp(DIR => $self->tmpdir, TEMPLATE => "tmp.signatureXXXX") or die;
+            my $likely_tmp = "/tmp";
+            if (! $self->tmpdir && -d $likely_tmp) {
+                $self->tmpdir($likely_tmp);
+                $sig_temp = eval { File::Temp->new(DIR => $self->tmpdir, TEMPLATE => "tmp.signatureXXXX") };
             }
+            return $self->_fail("tmpfile_error", "Couldn't create necessary temp files")
+                unless $sig_temp;
         }
 
-        my $pub_temp = new File::Temp(DIR => $self->tmpdir, TEMPLATE => "tmp.pubkeyXXXX") or die;
-        my $msg_temp = new File::Temp(DIR => $self->tmpdir, TEMPLATE => "tmp.msgXXXX") or die;
+        my $pub_temp = File::Temp->new(DIR => $self->tmpdir, TEMPLATE => "tmp.pubkeyXXXX") or die;
+        my $msg_temp = File::Temp->new(DIR => $self->tmpdir, TEMPLATE => "tmp.msgXXXX") or die;
         syswrite($sig_temp,$sig);
         syswrite($pub_temp,$public_pem);
         syswrite($msg_temp,$msg_plain);
