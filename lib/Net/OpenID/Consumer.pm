@@ -3,13 +3,13 @@
 use strict;
 use Carp ();
 use LWP::UserAgent;
-use URI::Fetch '0.02';
+use URI::Fetch 0.02;
 
 ############################################################################
 package Net::OpenID::Consumer;
 
 use vars qw($VERSION $HAS_CRYPT_DSA $HAS_CRYPT_OPENSSL $HAS_OPENSSL);
-$VERSION = "0.06";
+$VERSION = "0.07";
 
 use fields (
             'cache',          # the Cache object sent to URI::Fetch
@@ -177,7 +177,7 @@ sub _get_publickey {
         my $res = $self->ua->get($key_url);
         if ($res && $res->is_success) {
             my $pem = $res->content;
-            $cache->set($key_url, $pem) if $pem;
+            $cache->set($key_url, $pem) if $cache && $pem;
             return $pem;
         }
         return undef;
