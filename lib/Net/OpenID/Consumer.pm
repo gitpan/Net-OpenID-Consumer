@@ -9,7 +9,7 @@ use URI::Fetch 0.02;
 package Net::OpenID::Consumer;
 
 use vars qw($VERSION);
-$VERSION = "0.10";
+$VERSION = "0.11";
 
 use fields (
             'cache',          # the Cache object sent to URI::Fetch
@@ -27,7 +27,7 @@ use Net::OpenID::Association;
 use MIME::Base64 ();
 use Digest::SHA1 ();
 use Crypt::DH 0.05;
-use Time::Local qw(timegm);
+use Time::Local;
 use HTTP::Request;
 
 sub new {
@@ -118,6 +118,15 @@ sub ua {
 sub _fail {
     my Net::OpenID::Consumer $self = shift;
     my ($code, $text) = @_;
+
+    $text ||= {
+        'no_identity_server' => "The provided URL doesn't declare its OpenID identity server.",
+        'empty_url' => "No URL entered.",
+        'bogus_url' => "Invalid URL.",
+        'no_head_tag' => "URL provided doesn't seem to have a head tag.",
+        'url_fetch_err' => "Error fetching the provided URL.",
+    }->{$code};
+
     $self->{last_errcode} = $code;
     $self->{last_errtext} = $text;
 
@@ -278,7 +287,7 @@ sub _find_openid_server {
     my $sem_info = $self->_find_semantic_info($url, $final_url_ref) or
         return;
 
-    return $self->_fail("no_identity_servers") unless $sem_info->{"openid.server"};
+    return $self->_fail("no_identity_server") unless $sem_info->{"openid.server"};
     $sem_info->{"openid.server"};
 }
 
@@ -302,10 +311,10 @@ sub claimed_identity {
     my $final_url;
 
     my $sem_info = $self->_find_semantic_info($url, \$final_url) or
-        return $self->_fail("no_head_info", "No information found in head.");
+        return;
 
     my $id_server = $sem_info->{"openid.server"} or
-        return $self->_fail("no_identity_servers");
+        return $self->_fail("no_identity_server");
 
     return Net::OpenID::ClaimedIdentity->new(
                                              identity => $final_url,
@@ -315,6 +324,10 @@ sub claimed_identity {
                                              );
 }
 
+sub user_cancel {
+    my Net::OpenID::Consumer $self = shift;
+    return $self->args("openid.mode") eq "cancel";
+}
 
 sub user_setup_url {
     my Net::OpenID::Consumer $self = shift;
@@ -351,9 +364,8 @@ sub verified_identity {
     my $sem_info = $self->_find_semantic_info($real_ident, \$final_url);
     return $self->_fail("unexpected_url_redirect") unless $final_url eq $real_ident;
 
-    my $server = $sem_info->{"openid.server"};
-    return $self->_fail("no_identity_server")
-        unless $server;
+    my $server = $sem_info->{"openid.server"} or
+        return $self->_fail("no_identity_server");
 
     # if openid.delegate was used, check that it was done correctly
     if ($a_ident ne $real_ident) {
@@ -394,6 +406,12 @@ sub verified_identity {
 	    $post{"openid.$param"} = $self->args("openid.$param");
 	}
 
+        # if the server told us our handle as bogus, let's ask in our
+        # check_authentication mode whether that's true
+        if (my $ih = $self->args("openid.invalidate_handle")) {
+            $post{"openid.invalidate_handle"} = $ih;
+        }
+
         my $req = HTTP::Request->new(POST => $server);
         $req->header("Content-Type" => "application/x-www-form-urlencoded");
         $req->content(join("&", map { "$_=" . OpenID::util::eurl($post{$_}) } keys %post));
@@ -406,6 +424,12 @@ sub verified_identity {
 
         my $content = $res->content;
         my %args = OpenID::util::parse_keyvalue($content);
+
+        # delete the handle from our cache
+        if (my $ih = $args{'invalidate_handle'}) {
+            Net::OpenID::Association::invalidate_handle($self, $server, $ih);
+        }
+
         return $self->_fail("naive_verify_failed_return") unless $args{'lifetime'};
     }
 
@@ -523,7 +547,7 @@ sub w3c_to_time {
 
     my $time;
     eval {
-        $time = timegm($6, $5, $4, $3, $2 - 1, $1);
+        $time = Time::Local::timegm($6, $5, $4, $3, $2 - 1, $1);
     };
     return 0 if $@;
     return $time;
@@ -606,6 +630,8 @@ Net::OpenID::Consumer - library for consumers of OpenID identities
 
   if (my $setup_url = $csr->user_setup_url) {
        # redirect/link/popup user to $setup_url
+  } elsif ($csr->user_cancel) {
+       # restore web app state to prior to check_url
   } elsif (my $vident = $csr->verified_identity) {
        my $verified_url = $vident->url;
        print "You are $verified_url !";
@@ -700,6 +726,24 @@ object, or undef on failure.
 Note that this identity is NOT verified yet.  It's only who the user
 claims they are, but they could be lying.
 
+If this method returns undef, you can rely on the following errors
+codes (from $csr->B<errcode>) to decide what to present to the user:
+
+=over 8
+
+=item no_identity_server
+
+=item empty_url
+
+=item bogus_url
+
+=item no_head_tag
+
+=item url_fetch_err
+
+=back
+
+
 =item $csr->B<user_setup_url>( [ %opts ] )
 
 Returns the URL the user must return to in order to login, setup trust,
@@ -724,6 +768,16 @@ In any case, the identity server can do whatever it wants, so don't
 depend on this.
 
 =back
+
+=item $csr->B<user_cancel>
+
+Returns true if the user declined to share their identity, false
+otherwise.  (This function is literally one line: returns true if
+"openid.mode" eq "cancel")
+
+It's then your job to restore your app to where it was prior to
+redirecting them off to the user_setup_url, using the other query
+parameters that you'd sent along in your return_to URL.
 
 =item $csr->B<verified_identity>
 
