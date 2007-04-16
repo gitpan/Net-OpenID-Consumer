@@ -9,7 +9,7 @@ use URI::Fetch 0.02;
 package Net::OpenID::Consumer;
 
 use vars qw($VERSION);
-$VERSION = "0.12";
+$VERSION = "0.13";
 
 use fields (
             'cache',           # the Cache object sent to URI::Fetch
@@ -385,6 +385,10 @@ sub verified_identity {
     my $a_ident  = $self->args("openid.identity")     or return $self->_fail("no_identity");
 
     my $sig64    = $self->args("openid.sig")          or return $self->_fail("no_sig");
+    
+    # fix sig if the OpenID auth server failed to properly escape pluses (+) in the sig
+    $sig64 =~ s/ /+/g;
+
     my $returnto = $self->args("openid.return_to")    or return $self->_fail("no_return_to");
     my $signed   = $self->args("openid.signed");
 
@@ -425,6 +429,8 @@ sub verified_identity {
     $self->_debug("verified_identity: assoc_handle: $assoc_handle");
     my $assoc = Net::OpenID::Association::handle_assoc($self, $server, $assoc_handle);
 
+    my %signed_fields;   # key (without openid.) -> value
+
     if ($assoc) {
         $self->_debug("verified_identity: verifying with found association");
 
@@ -433,8 +439,10 @@ sub verified_identity {
 
         # verify the token
         my $token = "";
-        foreach my $p (split(/,/, $signed)) {
-            $token .= "$p:" . $self->args("openid.$p") . "\n";
+        foreach my $param (split(/,/, $signed)) {
+            my $val = $self->args("openid.$param");
+            $token .= "$param:$val\n";
+            $signed_fields{$param} = $val;
         }
 
         my $good_sig = OpenID::util::b64(OpenID::util::hmac_sha1($token, $assoc->secret));
@@ -451,12 +459,14 @@ sub verified_identity {
                     "openid.sig"          => $sig64,
                     );
 
-	# and copy in all signed parameters that we don't already have into %post
-	foreach my $param (split(/,/, $signed)) {
-	    next unless $param =~ /^\w+$/;
-	    next if $post{"openid.$param"};
-	    $post{"openid.$param"} = $self->args("openid.$param");
-	}
+        # and copy in all signed parameters that we don't already have into %post
+        foreach my $param (split(/,/, $signed)) {
+            next unless $param =~ /^[\w\.]+$/;
+            my $val = $self->args("openid.$param");
+            $signed_fields{$param} = $val;
+            next if $post{"openid.$param"};
+            $post{"openid.$param"} = $val;
+        }
 
         # if the server told us our handle as bogus, let's ask in our
         # check_authentication mode whether that's true
@@ -497,6 +507,7 @@ sub verified_identity {
                                               rss       => $sem_info->{"rss"},
                                               atom      => $sem_info->{"atom"},
                                               consumer  => $self,
+                                              signed_fields => \%signed_fields,
                                               );
 }
 

@@ -1,3 +1,14 @@
+0.13:
+	* work-around bug in some openid servers that don't escape "+".
+	  so treat a space as a +.  (from Thomas Sibley
+	  <trs@bestpractical.com>)
+
+        * go into dumb mode earlier if it's detected that our cache object
+	  isn't working
+
+	* give callers access to the signed_fields from the verified
+	  identity object
+
 0.12:
 	* required_root in constructor/method/validated_identity
 
