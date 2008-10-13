@@ -1,7 +1,7 @@
 # http://module-build.sourceforge.net/META-spec.html
 #XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
 name:         Net-OpenID-Consumer
-version:      0.14
+version:      1.01
 version_from: lib/Net/OpenID/Consumer.pm
 installdirs:  site
 requires:
@@ -12,7 +12,6 @@ requires:
     MIME::Base64:                  0
     Time::Local:                   0
     URI:                           0
-    URI::Fetch:                    0.02
 
 distribution_type: module
-generated_by: ExtUtils::MakeMaker version 6.17
+generated_by: ExtUtils::MakeMaker version 6.30_01
