@@ -1,3 +1,6 @@
+1.06:
+    * Added support for Apache2::Request (ysth)
+
 1.05:
 	* Added support for wide characters in extensions
 	* Switched to Crypt::DH::GMP

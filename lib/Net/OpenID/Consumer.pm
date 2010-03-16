@@ -1,15 +1,11 @@
-# LICENSE: You're free to distribute this under the same terms as Perl itself.
+package Net::OpenID::Consumer;
 
 use strict;
 use Carp ();
 use LWP::UserAgent;
 use Storable;
-
-############################################################################
-package Net::OpenID::Consumer;
-
 use vars qw($VERSION);
-$VERSION = "1.05";
+$VERSION = "1.06";
 
 use fields (
     'cache',           # a Cache object to store HTTP responses and associations
@@ -99,6 +95,7 @@ sub _debug {
 # given something that can have GET arguments, returns a subref to get them:
 #   Apache
 #   Apache::Request
+#   Apache2::Request
 #   CGI
 #   HASH of get args
 #   CODE returning get arg, given key
