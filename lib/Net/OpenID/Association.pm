@@ -1,9 +1,11 @@
-package
-Net::OpenID::Association;
 use strict;
 use Carp ();
 
 ############################################################################
+package Net::OpenID::Association;
+BEGIN {
+  $Net::OpenID::Association::VERSION = '1.030099_001';
+}
 use fields (
             'server',    # author-identity identity server endpoint
             'secret',    # the secret for this association
@@ -13,8 +15,8 @@ use fields (
             );
 
 use Storable ();
-use Crypt::DH::GMP 0.0.5;
 use Digest::SHA1 qw(sha1);
+use Net::OpenID::Common;
 
 sub new {
     my Net::OpenID::Association $self = shift;
@@ -98,13 +100,13 @@ sub server_assoc {
     }
 
     # make a new association
-    my $dh = _default_dh();
+    my $dh = OpenID::util::get_dh();
 
     my %post = (
                 "openid.mode" => "associate",
                 "openid.assoc_type" => "HMAC-SHA1",
                 "openid.session_type" => "DH-SHA1",
-                "openid.dh_consumer_public" => OpenID::util::bi2arg($dh->pub_key),
+                "openid.dh_consumer_public" => OpenID::util::int2arg($dh->pub_key),
                 );
 
     if ($protocol_version == 2) {
@@ -156,9 +158,9 @@ sub server_assoc {
     if ($stype ne "DH-SHA1") {
         $secret = OpenID::util::d64($args{'mac_key'});
     } else {
-        my $server_pub = OpenID::util::arg2bi($args{'dh_server_public'});
+        my $server_pub = OpenID::util::arg2int($args{'dh_server_public'});
         my $dh_sec = $dh->compute_secret($server_pub);
-        $secret = OpenID::util::d64($args{'enc_mac_key'}) ^ sha1(OpenID::util::bi2bytes($dh_sec));
+        $secret = OpenID::util::d64($args{'enc_mac_key'}) ^ sha1(OpenID::util::int2bytes($dh_sec));
     }
     return $dumb->("secret_not_20_bytes") unless length($secret) == 20;
 
@@ -216,16 +218,6 @@ sub invalidate_handle {
     $cache->set("hassoc:$server:$handle", "");
 }
 
-sub _default_dh {
-    my $dh = Crypt::DH::GMP->new;
-    $dh->p("155172898181473697471232257763715539915724801966915404479707795314057629378541917580651227423698188993727816152646631438561595825688188889951272158842675419950341258706556549803580104870537681476726513255747040765857479291291572334510643245094715007229621094194349783925984760375594985848253359305585439638443");
-    $dh->g("2");
-    $dh->generate_keys;
-    return $dh;
-}
-
-
-
 1;
 
 __END__
@@ -233,6 +225,10 @@ __END__
 =head1 NAME
 
 Net::OpenID::Association - a relationship with an identity server
+
+=head1 VERSION
+
+version 1.030099_001
 
 =head1 DESCRIPTION
 
@@ -251,4 +247,3 @@ L<Net::OpenID::VerifiedIdentity>
 L<Net::OpenID::Server>
 
 Website:  L<http://www.danga.com/openid/>
-

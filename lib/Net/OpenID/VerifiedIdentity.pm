@@ -3,6 +3,9 @@ use Carp ();
 
 ############################################################################
 package Net::OpenID::VerifiedIdentity;
+BEGIN {
+  $Net::OpenID::VerifiedIdentity::VERSION = '1.030099_001';
+}
 use fields (
     'identity',  # the verified identity URL
     'id_uri',  # the verified identity's URI object
@@ -272,6 +275,10 @@ __END__
 =head1 NAME
 
 Net::OpenID::VerifiedIdentity - object representing a verified OpenID identity
+
+=head1 VERSION
+
+version 1.030099_001
 
 =head1 SYNOPSIS
 

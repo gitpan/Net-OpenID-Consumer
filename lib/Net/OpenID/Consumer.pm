@@ -1,11 +1,15 @@
-package Net::OpenID::Consumer;
+# LICENSE: You're free to distribute this under the same terms as Perl itself.
 
 use strict;
 use Carp ();
 use LWP::UserAgent;
 use Storable;
-use vars qw($VERSION);
-$VERSION = "1.06";
+
+############################################################################
+package Net::OpenID::Consumer;
+BEGIN {
+  $Net::OpenID::Consumer::VERSION = '1.030099_001';
+}
 
 use fields (
     'cache',           # a Cache object to store HTTP responses and associations
@@ -26,12 +30,12 @@ use Net::OpenID::Association;
 use Net::OpenID::Yadis;
 use Net::OpenID::IndirectMessage;
 use Net::OpenID::URIFetch;
+use Net::OpenID::Common; # To get the OpenID::util package
 
 use MIME::Base64 ();
-use Digest::SHA1 ();
+use Digest::SHA qw(hmac_sha1 hmac_sha1_hex);
 use Time::Local;
 use HTTP::Request;
-use Math::BigInt;
 
 sub new {
     my Net::OpenID::Consumer $self = shift;
@@ -95,7 +99,6 @@ sub _debug {
 # given something that can have GET arguments, returns a subref to get them:
 #   Apache
 #   Apache::Request
-#   Apache2::Request
 #   CGI
 #   HASH of get args
 #   CODE returning get arg, given key
@@ -607,14 +610,16 @@ sub user_setup_url {
     my $post_grant = delete $opts{'post_grant'};
     Carp::croak("Unknown options: " . join(", ", keys %opts)) if %opts;
 
+    my $setup_url = undef;
+
     if ($self->_message_version == 1) {
         return $self->_fail("bad_mode") unless $self->_message_mode eq "id_res";
+        $setup_url = $self->message("user_setup_url");
     }
     else {
         return undef unless $self->_message_mode eq 'setup_needed';
+        $setup_url = $self->message("user_setup_url");
     }
-
-    my $setup_url = $self->message("user_setup_url");
 
     OpenID::util::push_url_arg(\$setup_url, "openid.post_grant", $post_grant)
         if $setup_url && $post_grant;
@@ -694,8 +699,8 @@ sub verified_identity {
         return $self->_fail("time_in_future") if $sig_time - 30 > $now;
         # and check that the time isn't faked
         my $c_secret = $self->_get_consumer_secret($sig_time);
-        my $good_sig = substr(OpenID::util::hmac_sha1_hex($sig_time, $c_secret), 0, 20);
-        return $self->_fail("time_bad_sig") unless $sig eq $good_sig;
+        my $good_sig = substr(hmac_sha1_hex($sig_time, $c_secret), 0, 20);
+        return $self->_fail("time_bad_sig") unless OpenID::util::timing_indep_eq($sig, $good_sig);
     }
 
     my $last_error = undef;
@@ -805,9 +810,9 @@ sub verified_identity {
             $token .= "$param:$val\n";
             $signed_fields{$param} = $val;
         }
-        utf8::encode( $token );
-        my $good_sig = OpenID::util::b64(OpenID::util::hmac_sha1($token, $assoc->secret));
-        return $self->_fail("signature_mismatch") unless $sig64 eq $good_sig;
+
+        my $good_sig = OpenID::util::b64(hmac_sha1($token, $assoc->secret));
+        return $self->_fail("signature_mismatch") unless OpenID::util::timing_indep_eq($sig64, $good_sig);
 
     } else {
         $self->_debug("verified_identity: verifying using HTTP (dumb mode)");
@@ -888,192 +893,16 @@ sub _get_consumer_secret {
     return $sec;
 }
 
-package OpenID::util;
-
-use constant VERSION_1_NAMESPACE => "http://openid.net/signon/1.1";
-use constant VERSION_2_NAMESPACE => "http://specs.openid.net/auth/2.0";
-
-# I guess this is a bit daft since constants are subs anyway,
-# but whatever.
-sub version_1_namespace {
-    return VERSION_1_NAMESPACE;
-}
-sub version_2_namespace {
-    return VERSION_2_NAMESPACE;
-}
-sub version_1_xrds_service_url {
-    return VERSION_1_NAMESPACE;
-}
-sub version_2_xrds_service_url {
-    return "http://specs.openid.net/auth/2.0/signon";
-}
-sub version_2_xrds_directed_service_url {
-    return "http://specs.openid.net/auth/2.0/server";
-}
-sub version_2_identifier_select_url {
-    return "http://specs.openid.net/auth/2.0/identifier_select";
-}
-
-# From Digest::HMAC
-sub hmac_sha1_hex {
-    unpack("H*", &hmac_sha1);
-}
-sub hmac_sha1 {
-    hmac($_[0], $_[1], \&Digest::SHA1::sha1, 64);
-}
-sub hmac {
-    my($data, $key, $hash_func, $block_size) = @_;
-    $block_size ||= 64;
-    $key = &$hash_func($key) if length($key) > $block_size;
-
-    my $k_ipad = $key ^ (chr(0x36) x $block_size);
-    my $k_opad = $key ^ (chr(0x5c) x $block_size);
-
-    &$hash_func($k_opad, &$hash_func($k_ipad, $data));
-}
-
-sub parse_keyvalue {
-    my $reply = shift;
-    my %ret;
-    $reply =~ s/\r//g;
-    foreach (split /\n/, $reply) {
-        next unless /^(\S+?):(.*)/;
-        $ret{$1} = $2;
-    }
-    return %ret;
-}
-
-sub ejs
-{
-    my $a = $_[0];
-    $a =~ s/[\"\'\\]/\\$&/g;
-    $a =~ s/\r?\n/\\n/gs;
-    $a =~ s/\r//;
-    return $a;
-}
-
-# Data::Dumper for JavaScript
-sub js_dumper {
-    my $obj = shift;
-    if (ref $obj eq "HASH") {
-        my $ret = "{";
-        foreach my $k (keys %$obj) {
-            $ret .= "$k: " . js_dumper($obj->{$k}) . ",";
-        }
-        chop $ret;
-        $ret .= "}";
-        return $ret;
-    } elsif (ref $obj eq "ARRAY") {
-        my $ret = "[" . join(", ", map { js_dumper($_) } @$obj) . "]";
-        return $ret;
-    } else {
-        return $obj if $obj =~ /^\d+$/;
-        return "\"" . ejs($obj) . "\"";
-    }
-}
-
-sub eurl
-{
-    my $a = $_[0];
-    $a =~ s/([^a-zA-Z0-9_\,\-.\/\\\: ])/uc sprintf("%%%02x",ord($1))/eg;
-    $a =~ tr/ /+/;
-    return $a;
-}
-
-sub push_url_arg {
-    my $uref = shift;
-    $$uref =~ s/[&?]$//;
-    my $got_qmark = ($$uref =~ /\?/);
-
-    while (@_) {
-        my $key = shift;
-        my $value = shift;
-        $$uref .= $got_qmark ? "&" : ($got_qmark = 1, "?");
-        $$uref .= eurl($key) . "=" . eurl($value);
-    }
-}
-
-sub push_openid2_url_arg {
-    my $uref = shift;
-    my %args = @_;
-    push_url_arg($uref,
-        'openid.ns' => VERSION_2_NAMESPACE,
-        map {
-            'openid.'.$_ => $args{$_}
-        } keys %args,
-    );
-}
-
-sub time_to_w3c {
-    my $time = shift || time();
-    my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = gmtime($time);
-    $mon++;
-    $year += 1900;
-
-    return sprintf("%04d-%02d-%02dT%02d:%02d:%02dZ",
-                   $year, $mon, $mday,
-                   $hour, $min, $sec);
-}
-
-sub w3c_to_time {
-    my $hms = shift;
-    return 0 unless
-        $hms =~ /^(\d{4,4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)Z$/;
-
-    my $time;
-    eval {
-        $time = Time::Local::timegm($6, $5, $4, $3, $2 - 1, $1);
-    };
-    return 0 if $@;
-    return $time;
-}
-
-sub bi2bytes {
-    my $bigint = Math::BigInt->new(shift);
-    die "Can't deal with negative numbers" if $bigint->is_negative;
-
-    my $bits = $bigint->as_bin;
-    die unless $bits =~ s/^0b//;
-
-    # prepend zeros to round to byte boundary, or to unset high bit
-    my $prepend = (8 - length($bits) % 8) || ($bits =~ /^1/ ? 8 : 0);
-    $bits = ("0" x $prepend) . $bits if $prepend;
-
-    return pack("B*", $bits);
-}
-
-sub bi2arg {
-    return b64(bi2bytes($_[0]));
-}
-
-sub b64 {
-    my $val = MIME::Base64::encode_base64($_[0]);
-    $val =~ s/\s+//g;
-    return $val;
-}
-
-sub d64 {
-    return MIME::Base64::decode_base64($_[0]);
-}
-
-sub bytes2bi {
-    return Math::BigInt->new("0b" . unpack("B*", $_[0]));
-}
-
-sub arg2bi {
-    return undef unless defined $_[0] and $_[0] ne "";
-    # don't acccept base-64 encoded numbers over 700 bytes.  which means
-    # those over 4200 bits.
-    return Math::BigInt->new("0") if length($_[0]) > 700;
-    return bytes2bi(MIME::Base64::decode_base64($_[0]));
-}
-
-
+1;
 __END__
 
 =head1 NAME
 
 Net::OpenID::Consumer - library for consumers of OpenID identities
+
+=head1 VERSION
+
+version 1.030099_001
 
 =head1 SYNOPSIS
 
@@ -1440,4 +1269,3 @@ Brad Fitzpatrick <brad@danga.com>
 Tatsuhiko Miyagawa <miyagawa@sixapart.com>
 
 Martin Atkins <mart@degeneration.co.uk>
-

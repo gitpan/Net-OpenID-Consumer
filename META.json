@@ -1,0 +1,54 @@
+{
+   "abstract" : "library for consumers of OpenID identities",
+   "author" : [
+      "Robert Norris <rob@eatenbyagrue.org>"
+   ],
+   "dynamic_config" : 0,
+   "generated_by" : "Dist::Zilla version 4.102342, CPAN::Meta::Converter version 2.102400",
+   "license" : [
+      "perl_5"
+   ],
+   "meta-spec" : {
+      "url" : "http://search.cpan.org/perldoc?CPAN::Meta::Spec",
+      "version" : "2"
+   },
+   "name" : "Net-OpenID-Consumer",
+   "prereqs" : {
+      "configure" : {
+         "requires" : {
+            "ExtUtils::MakeMaker" : "6.31"
+         }
+      },
+      "runtime" : {
+         "requires" : {
+            "Digest::SHA" : 0,
+            "HTTP::Request" : 0,
+            "LWP::UserAgent" : 0,
+            "MIME::Base64" : 0,
+            "Net::OpenID::Common" : "1.030099_001",
+            "Storable" : 0,
+            "Time::Local" : 0,
+            "URI" : 0
+         }
+      },
+      "test" : {
+         "requires" : {
+            "Test::More" : 0
+         }
+      }
+   },
+   "release_status" : "testing",
+   "resources" : {
+      "bugtracker" : {
+         "mailto" : "bug-net-openid-consumer@rt.cpan.org",
+         "web" : "http://rt.cpan.org/NoAuth/Bugs.html?Dist=Net-OpenID-Consumer"
+      },
+      "repository" : {
+         "type" : "git",
+         "url" : "git://github.com/robn/Net-OpenID-Consumer.git",
+         "web" : "http://github.com/robn/Net-OpenID-Consumer"
+      }
+   },
+   "version" : "1.030099_001"
+}
+

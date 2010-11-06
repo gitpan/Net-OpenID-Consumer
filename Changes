@@ -1,10 +1,17 @@
-1.06:
-    * Added support for Apache2::Request (ysth)
+1.030099_001 Nov 06 2010
 
-1.05:
-	* Added support for wide characters in extensions
-	* Switched to Crypt::DH::GMP
-	* Updated ChangeLog
+    * Use Crypt::DH::GMP over Crypt::DH for speed (Robert Norris)
+
+    * Fix potential timing attack when checking signatures (Adam Sjøgren)
+      (see http://lists.openid.net/pipermail/openid-security/2010-July/001156.html)
+
+	* Set sreg namespace based on what the server is expecting
+      (Adam Sjøgren)
+
+	* Moved some utility bits out to a separate Net::OpenID::Common
+	  package so that Net::OpenID::Server can use it in future
+	  versions.
+
 1.03:
 
         * Enforce the rules from the Auth 2.0 spec about which fields
