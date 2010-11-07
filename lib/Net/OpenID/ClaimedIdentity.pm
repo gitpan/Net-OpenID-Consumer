@@ -4,7 +4,7 @@ use Carp ();
 ############################################################################
 package Net::OpenID::ClaimedIdentity;
 BEGIN {
-  $Net::OpenID::ClaimedIdentity::VERSION = '1.030099_001';
+  $Net::OpenID::ClaimedIdentity::VERSION = '1.030099_002';
 }
 use fields (
     'identity',         # the canonical URL that was found, following redirects
@@ -15,6 +15,8 @@ use fields (
     'semantic_info',    # Stuff that we've discovered in the identifier page's metadata
     'extension_args',   # Extension arguments that the caller wants to add to the request
 );
+
+use Digest::SHA qw(hmac_sha1_hex);
 
 sub new {
     my Net::OpenID::ClaimedIdentity $self = shift;
@@ -130,7 +132,7 @@ sub check_url {
     # add a HMAC-signed time so we can verify the return_to URL wasn't spoofed
     my $sig_time = time();
     my $c_secret = $csr->_get_consumer_secret($sig_time);
-    my $sig = substr(OpenID::util::hmac_sha1_hex($sig_time, $c_secret), 0, 20);
+    my $sig = substr(hmac_sha1_hex($sig_time, $c_secret), 0, 20);
     OpenID::util::push_url_arg(\$return_to,
                                "oic.time", "${sig_time}-$sig");
 
@@ -211,7 +213,7 @@ Net::OpenID::ClaimedIdentity - a not-yet-verified OpenID identity
 
 =head1 VERSION
 
-version 1.030099_001
+version 1.030099_002
 
 =head1 SYNOPSIS
 

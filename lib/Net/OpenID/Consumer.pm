@@ -8,7 +8,7 @@ use Storable;
 ############################################################################
 package Net::OpenID::Consumer;
 BEGIN {
-  $Net::OpenID::Consumer::VERSION = '1.030099_001';
+  $Net::OpenID::Consumer::VERSION = '1.030099_002';
 }
 
 use fields (
@@ -902,7 +902,7 @@ Net::OpenID::Consumer - library for consumers of OpenID identities
 
 =head1 VERSION
 
-version 1.030099_001
+version 1.030099_002
 
 =head1 SYNOPSIS
 

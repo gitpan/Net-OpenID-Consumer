@@ -25,4 +25,4 @@ requires:
 resources:
   bugtracker: http://rt.cpan.org/NoAuth/Bugs.html?Dist=Net-OpenID-Consumer
   repository: git://github.com/robn/Net-OpenID-Consumer.git
-version: 1.030099_001
+version: 1.030099_002
