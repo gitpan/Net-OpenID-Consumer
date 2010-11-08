@@ -8,7 +8,7 @@ use Storable;
 ############################################################################
 package Net::OpenID::Consumer;
 BEGIN {
-  $Net::OpenID::Consumer::VERSION = '1.030099_002';
+  $Net::OpenID::Consumer::VERSION = '1.030099_003';
 }
 
 use fields (
@@ -825,6 +825,10 @@ sub verified_identity {
                     "openid.sig"          => $sig64,
                     );
 
+        if ($self->_message_version >= 2) {
+            $post{'openid.ns'} = OpenID::util::VERSION_2_NAMESPACE();
+        }
+
         # and copy in all signed parameters that we don't already have into %post
         foreach my $param (split(/,/, $signed)) {
             next unless $param =~ /^[\w\.]+$/;
@@ -898,11 +902,11 @@ __END__
 
 =head1 NAME
 
-Net::OpenID::Consumer - library for consumers of OpenID identities
+Net::OpenID::Consumer - Library for consumers of OpenID identities
 
 =head1 VERSION
 
-version 1.030099_002
+version 1.030099_003
 
 =head1 SYNOPSIS
 

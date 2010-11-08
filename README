@@ -1,9 +1,9 @@
 
 
 This archive contains the distribution Net-OpenID-Consumer,
-version 1.030099_002:
+version 1.030099_003:
 
-  library for consumers of OpenID identities
+  Library for consumers of OpenID identities
 
 This software is copyright (c) 2005 by Brad Fitzpatrick.
 

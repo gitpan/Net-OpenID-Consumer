@@ -9,7 +9,7 @@ use ExtUtils::MakeMaker 6.31;
 
 
 my %WriteMakefileArgs = (
-  'ABSTRACT' => 'library for consumers of OpenID identities',
+  'ABSTRACT' => 'Library for consumers of OpenID identities',
   'AUTHOR' => 'Robert Norris <rob@eatenbyagrue.org>',
   'BUILD_REQUIRES' => {
     'Test::More' => '0'
@@ -31,7 +31,7 @@ my %WriteMakefileArgs = (
     'Time::Local' => '0',
     'URI' => '0'
   },
-  'VERSION' => '1.030099_002',
+  'VERSION' => '1.030099_003',
   'test' => {
     'TESTS' => 't/*.t'
   }

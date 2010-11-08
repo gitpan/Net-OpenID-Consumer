@@ -1,5 +1,5 @@
 {
-   "abstract" : "library for consumers of OpenID identities",
+   "abstract" : "Library for consumers of OpenID identities",
    "author" : [
       "Robert Norris <rob@eatenbyagrue.org>"
    ],
@@ -49,6 +49,6 @@
          "web" : "http://github.com/robn/Net-OpenID-Consumer"
       }
    },
-   "version" : "1.030099_002"
+   "version" : "1.030099_003"
 }
 
