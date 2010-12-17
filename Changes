@@ -1,3 +1,9 @@
+1.030099_004 Dec 18 2010
+
+    * Added example CGI program (Robert Norris)
+    
+    * Added missing error messages (Mario Domgoergen)
+
 1.030099_003 Nov 09 2010
 
     * Add namespace to check_authentication signature verification calls to

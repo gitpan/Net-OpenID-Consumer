@@ -5,6 +5,7 @@ META.json
 META.yml
 Makefile.PL
 README
+examples/consumer.cgi
 lib/Net/OpenID/Association.pm
 lib/Net/OpenID/ClaimedIdentity.pm
 lib/Net/OpenID/Consumer.pm

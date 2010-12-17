@@ -4,7 +4,7 @@
       "Robert Norris <rob@eatenbyagrue.org>"
    ],
    "dynamic_config" : 0,
-   "generated_by" : "Dist::Zilla version 4.102342, CPAN::Meta::Converter version 2.102400",
+   "generated_by" : "Dist::Zilla version 4.102345, CPAN::Meta::Converter version 2.102400",
    "license" : [
       "perl_5"
    ],
@@ -43,12 +43,13 @@
          "mailto" : "bug-net-openid-consumer@rt.cpan.org",
          "web" : "http://rt.cpan.org/NoAuth/Bugs.html?Dist=Net-OpenID-Consumer"
       },
+      "homepage" : "http://groups.google.com/group/openid-perl",
       "repository" : {
          "type" : "git",
          "url" : "git://github.com/robn/Net-OpenID-Consumer.git",
          "web" : "http://github.com/robn/Net-OpenID-Consumer"
       }
    },
-   "version" : "1.030099_003"
+   "version" : "1.030099_004"
 }
 
