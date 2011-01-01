@@ -31,7 +31,7 @@ my %WriteMakefileArgs = (
     'Time::Local' => '0',
     'URI' => '0'
   },
-  'VERSION' => '1.030099_004',
+  'VERSION' => '1.030099_005',
   'test' => {
     'TESTS' => 't/*.t'
   }
