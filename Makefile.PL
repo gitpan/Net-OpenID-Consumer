@@ -10,7 +10,7 @@ use ExtUtils::MakeMaker 6.31;
 
 my %WriteMakefileArgs = (
   'ABSTRACT' => 'Library for consumers of OpenID identities',
-  'AUTHOR' => 'Robert Norris <rob@eatenbyagrue.org>',
+  'AUTHOR' => 'Robert Norris <rob@eatenbyagrue.org>, Roger Crew <crew@cs.stanford.edu>',
   'BUILD_REQUIRES' => {
     'Test::More' => '0'
   },
@@ -24,14 +24,15 @@ my %WriteMakefileArgs = (
   'PREREQ_PM' => {
     'Digest::SHA' => '0',
     'HTTP::Request' => '0',
+    'JSON' => '0',
     'LWP::UserAgent' => '0',
     'MIME::Base64' => '0',
-    'Net::OpenID::Common' => '1.030099_001',
+    'Net::OpenID::Common' => '1.030099_004',
     'Storable' => '0',
     'Time::Local' => '0',
     'URI' => '0'
   },
-  'VERSION' => '1.030099_005',
+  'VERSION' => '1.030099_006',
   'test' => {
     'TESTS' => 't/*.t'
   }

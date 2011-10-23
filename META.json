@@ -1,10 +1,11 @@
 {
    "abstract" : "Library for consumers of OpenID identities",
    "author" : [
-      "Robert Norris <rob@eatenbyagrue.org>"
+      "Robert Norris <rob@eatenbyagrue.org>",
+      "Roger Crew <crew@cs.stanford.edu>"
    ],
    "dynamic_config" : 0,
-   "generated_by" : "Dist::Zilla version 4.102345, CPAN::Meta::Converter version 2.102400",
+   "generated_by" : "Dist::Zilla version 4.101900, CPAN::Meta::Converter version 2.101670",
    "license" : [
       "perl_5"
    ],
@@ -23,9 +24,10 @@
          "requires" : {
             "Digest::SHA" : 0,
             "HTTP::Request" : 0,
+            "JSON" : 0,
             "LWP::UserAgent" : 0,
             "MIME::Base64" : 0,
-            "Net::OpenID::Common" : "1.030099_001",
+            "Net::OpenID::Common" : "1.030099_004",
             "Storable" : 0,
             "Time::Local" : 0,
             "URI" : 0
@@ -50,6 +52,6 @@
          "web" : "http://github.com/robn/Net-OpenID-Consumer"
       }
    },
-   "version" : "1.030099_005"
+   "version" : "1.030099_006"
 }
 

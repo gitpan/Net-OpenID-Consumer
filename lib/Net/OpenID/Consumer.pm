@@ -2,15 +2,13 @@
 
 use strict;
 use Carp ();
-use LWP::UserAgent;
-use Storable;
-use JSON qw(encode_json);
 
 ############################################################################
 package Net::OpenID::Consumer;
 BEGIN {
-  $Net::OpenID::Consumer::VERSION = '1.030099_005';
+  $Net::OpenID::Consumer::VERSION = '1.030099_006';
 }
+
 
 use fields (
     'cache',           # a Cache object to store HTTP responses and associations
@@ -23,6 +21,7 @@ use fields (
     'last_errtext',    # last error code we got
     'debug',           # debug flag or codeblock
     'minimum_version', # The minimum protocol version to support
+    'assoc_options',   # options for establishing server associations
 );
 
 use Net::OpenID::ClaimedIdentity;
@@ -34,16 +33,18 @@ use Net::OpenID::URIFetch;
 use Net::OpenID::Common; # To get the OpenID::util package
 
 use MIME::Base64 ();
-use Digest::SHA qw(hmac_sha1 hmac_sha1_hex);
+use Digest::SHA qw(hmac_sha1_hex);
 use Time::Local;
 use HTTP::Request;
+use LWP::UserAgent;
+use Storable;
+use JSON qw(encode_json);
+use URI::Escape qw(uri_escape);
 
 sub new {
     my Net::OpenID::Consumer $self = shift;
     $self = fields::new( $self ) unless ref $self;
     my %opts = @_;
-
-    $opts{minimum_version} ||= 1;
 
     $self->{ua}            = delete $opts{ua};
     $self->args            ( delete $opts{args}            );
@@ -51,6 +52,7 @@ sub new {
     $self->consumer_secret ( delete $opts{consumer_secret} );
     $self->required_root   ( delete $opts{required_root}   );
     $self->minimum_version ( delete $opts{minimum_version} );
+    $self->assoc_options   ( delete $opts{assoc_options}   );
 
     $self->{debug} = delete $opts{debug};
 
@@ -59,19 +61,16 @@ sub new {
 }
 
 # NOTE: This method is here only to support the openid-test library.
-# Don't call it from anywhere else, or you'll break when it gets 
-# removed. Instead, set the minimum_version property.
-# FIXME: Can we just make openid-test set minimum_version and get
-# rid of this?
+# Don't call it from anywhere else, or you'll break when it gets
+# removed. Instead, call minimum_version(2).
+# FIXME: Can we just make openid-test do that and get rid of this?
 sub disable_version_1 {
-    my $self = shift;
-    $self->{minimum_version} = 2.0;
+    $_[0]->minimum_version(2);
 }
 
 sub cache           { &_getset; }
 sub consumer_secret { &_getset; }
 sub required_root   { &_getset; }
-sub minimum_version { &_getset; }
 
 sub _getset {
     my Net::OpenID::Consumer $self = shift;
@@ -84,6 +83,46 @@ sub _getset {
         $self->{$param} = $val;
     }
     return $self->{$param};
+}
+
+sub minimum_version {
+    my Net::OpenID::Consumer $self = shift;
+
+    if (@_) {
+        my $minv = shift;
+        Carp::croak("Too many parameters") if @_;
+        $minv = 1 unless $minv && $minv > 1;
+        $self->{minimum_version} = $minv;
+    }
+    return $self->{minimum_version};
+}
+
+sub assoc_options {
+    my Net::OpenID::Consumer $self = shift;
+    my $v;
+    if (scalar(@_) == 1) {
+        $v = shift;
+        unless ($v) {
+            $v = {};
+        }
+        elsif (ref $v eq 'ARRAY') {
+            $v = {@$v};
+        }
+        elsif (ref $v) {
+            # assume it's a hash and hope for the best
+            $v = {%$v};
+        }
+        else {
+            Carp::croak("single argument must be HASH or ARRAY reference");
+        }
+        $self->{assoc_options} = $v;
+    }
+    elsif (@_) {
+        Carp::croak("odd number of parameters?")
+            if scalar(@_)%2;
+        $self->{assoc_options} = {@_};
+    }
+    return $self->{assoc_options};
 }
 
 sub _debug {
@@ -113,13 +152,24 @@ sub args {
         unless (ref $what) {
             return $self->{args} ? $self->{args}->($what) : Carp::croak("No args defined");
         }
+        Carp::croak("Too many parameters") if @_;
+
+        # since we do not require field setters to be called in any particular order,
+        # we cannot pass minimum_version here as it might change later.
+        my $message = Net::OpenID::IndirectMessage->new($what);
+        $self->{message} = $message;
+        if ($message) {
+            $self->{args} = $message->getter;
+
+            # handle OpenID 2.0 'error' mode
+            # (may as well do this here; we may not get another chance
+            # since handle_server_response is not a required part of the API)
+            if ($message->protocol_version >= 2 && $message->mode eq 'error') {
+                $self->_fail('provider_error',$message->get('error'));
+            }
+        }
         else {
-            Carp::croak("Too many parameters") if @_;
-            my $message = Net::OpenID::IndirectMessage->new($what, (
-                minimum_version => $self->minimum_version,
-            ));
-            $self->{message} = $message;
-            $self->{args} = $message ? $message->getter : sub { undef };
+            $self->{args} = sub { undef };
         }
     }
     $self->{args};
@@ -127,22 +177,26 @@ sub args {
 
 sub message {
     my Net::OpenID::Consumer $self = shift;
-    if (my $key = shift) {
-        return $self->{message} ? $self->{message}->get($key) : undef;
+    my $message = $self->{message};
+    return undef
+      unless $message &&
+        ($self->{minimum_version} <= $message->protocol_version);
+
+    if (@_) {
+        return $message->get($_[0]);
     }
     else {
-        return $self->{message};
+        return $message;
     }
 }
 
-sub _message_mode {
-    my $message = $_[0]->message;
-    return $message ? $message->mode : undef;
+sub _message_mode_is {
+    return (($_[0]->message('mode')||' ') eq $_[1]);
 }
 
 sub _message_version {
     my $message = $_[0]->message;
-    return $message ? $message->protocol_version : undef;
+    return $message ? $message->protocol_version : 0;
 }
 
 sub ua {
@@ -159,35 +213,44 @@ sub ua {
     $self->{ua};
 }
 
+our %Error_text =
+   (
+    'bad_mode'                    => "The openid.mode argument is not correct",
+    'bogus_return_to'             => "Return URL does not match required_root.",
+    'bogus_url'                   => "URL scheme must be http: or https:",
+    'empty_url'                   => "No URL entered.",
+    'expired_association'         => "Association between ID provider and relying party has expired.",
+    'naive_verify_failed_network' => "Could not contact ID provider to verify response.",
+    'naive_verify_failed_return'  => "Direct contact invalidated ID provider response.",
+    'no_head_tag'                 => "Could not determine ID provider; URL document has no <head>.",
+    'no_identity'                 => "Identity is missing from ID provider response.",
+    'no_identity_server'          => "Could not determine ID provider from URL.",
+    'no_return_to'                => "Return URL is missing from ID provider response.",
+    'no_sig'                      => "Signature is missing from ID provider response.",
+    'protocol_version_incorrect'  => "ID provider does not support minimum protocol version",
+    'provider_error'              => "ID provider-specific error",
+    'signature_mismatch'          => "Prior association invalidated ID provider response.",
+    'time_bad_sig'                => "Return_to signature is not valid.",
+    'time_expired'                => "Return_to signature is stale.",
+    'time_in_future'              => "Return_to signature is from the future.",
+    'unsigned_field'              => sub { "Field(s) must be signed: " . join(", ", @_) },
+    'url_fetch_err'               => "Error fetching the provided URL.",
+   );
+
 sub _fail {
     my Net::OpenID::Consumer $self = shift;
-    my ($code, $text) = @_;
+    my ($code, $text, @params) = @_;
 
-    $text ||= {
-        'bad_mode'                    => "The openid.mode argument is not correct",
-        'bogus_return_to'             => "The provided return URL doesn't match required_root.",
-        'bogus_url'                   => "Invalid URL.",
-        'empty_url'                   => "No URL entered.",
-        'expired_association'         => "Association between Provider and Relying Pary has expired.",
-        'naive_verify_failed_network' => "Could not contact provider to verify signature",
-        'naive_verify_failed_return'  => "Provider says signature is invalid",
-        'no_head_tag'                 => "URL provided doesn't seem to have a head tag.",
-        'no_identity'                 => "No identity was provided by the OpenID identity server.",
-        'no_identity_server'          => "The provided URL doesn't declare its OpenID identity server.",
-        'no_return_to'                => "No return URL was provided by the OpenID identity server.",
-        'no_sig'                      => "No signature URL was provided by the OpenID identity server.",
-        'protocol_version_incorrect'  => "The provided URL uses the wrong protocol version",
-        'signature_mismatch'          => "The returned signature doesn't match.",
-        'time_bad_sig'                => "Bad time on signature.",
-        'time_expired'                => "Signature time expired.",
-        'time_in_future'              => "The OpenID identity server provided a time in the future.",
-        'url_fetch_err'               => "Error fetching the provided URL.",
-    }->{$code};
-
-    $self->{last_errcode} = $code;
-    $self->{last_errtext} = $text;
-
-    $self->_debug("fail($code) $text");
+    # 'bad_mode' is only an error if we survive to the end of
+    # .mode dispatch without having figured out what to do;
+    # it should not overwrite other errors.
+    unless ($self->{last_errcode} && $code eq 'bad_mode') {
+        $text ||= $Error_text{$code};
+        $text = $text->(@params) if ref($text) && ref($text) eq 'CODE';
+        $self->{last_errcode} = $code;
+        $self->{last_errtext} = $text;
+        $self->_debug("fail($code) $text");
+    }
     wantarray ? () : undef;
 }
 
@@ -226,104 +289,114 @@ sub _get_url_contents {
     return $res ? $res->content : undef;
 }
 
+sub _element_attributes {
+    local $_ = shift;
+    my %a = ();
+    while (m!\G[[:space:]]+([^[:space:]=]+)(?:=(?:([-a-zA-Z0-9._:]+)|'([^\']+)'|"([^\"]+)")([^[:space:]]*))?!g) {
+        next if $5; # skip malformed attributes
+        my $v = (defined $2 ? $2 : defined $3 ? $3 : $4);
+        $a{lc($1)} = $v if defined $v;
+    }
+    return \%a;
+}
+
+# List of head elements that matter for HTTP discovery.
+# Each entry defines a key for the _find_semantic_info hash
+#  [
+#    KEY         -- key name
+#    ELEMENT     -- html element name, must be 'link' or 'meta'
+#    ATTR        -- html attribute name (where key value lives)
+#    MATCH_VALUE -- string (default = KEY)
+#    MATCH_ATTRS -- list-ref of html attribute names
+#            default = ['rel']  if ELEMENT is <link...>
+#            default = ['name'] if ELEMENT is <meta...>
+#  ]
+#  _find_semantic_info->{KEY} =
+#    ATTR value of the ELEMENT for which
+#    MATCH_VALUE == ;-join of MATCH_ATTRS values
+#
+our @HTTP_discovery_link_meta_tags =
+  (
+   # OpenID servers / delegated identities
+   # <link rel="openid.server"
+   #       href="http://www.livejournal.com/misc/openid.bml" />
+   # <link rel="openid.delegate"
+   #       href="whatever" />
+   #
+   [qw(openid.server    link  href)], # 'openid.server'==.rel (<link> default)
+   [qw(openid.delegate  link  href)],
+
+   # OpenID2 providers / local identifiers
+   # <link rel="openid2.provider"
+   #       href="http://www.livejournal.com/misc/openid.bml" />
+   # <link rel="openid2.local_id" href="whatever" />
+   #
+   [qw(openid2.provider  link  href)],
+   [qw(openid2.local_id  link  href)],
+
+   # FOAF maker info
+   # <meta name="foaf:maker"
+   #  content="foaf:mbox_sha1sum '4caa1d6f6203d21705a00a7aca86203e82a9cf7a'"/>
+   #
+   [qw(foaf.maker  meta content foaf:maker)], # == .name  (<meta> default)
+
+   # FOAF documents
+   # <link rel="meta" type="application/rdf+xml" title="FOAF"
+   #       href="http://brad.livejournal.com/data/foaf" />
+   #
+   [qw(foaf  link  href  meta;foaf;application/rdf+xml),  [qw(rel title type)]],
+
+   # RSS
+   # <link rel="alternate" type="application/rss+xml" title="RSS"
+   #       href="http://www.livejournal.com/~brad/data/rss" />
+   #
+   [qw(rss   link  href  alternate;application/rss+xml),  [qw(rel type)]],
+
+   # Atom
+   # <link rel="alternate" type="application/atom+xml" title="Atom"
+   #       href="http://www.livejournal.com/~brad/data/rss" />
+   #
+   [qw(atom  link  href  alternate;application/atom+xml), [qw(rel type)]],
+  );
+
 sub _find_semantic_info {
     my Net::OpenID::Consumer $self = shift;
     my $url = shift;
     my $final_url_ref = shift;
 
-    my $trim_hook = sub {
-        my $htmlref = shift;
-        # trim everything past the body.  this is in case the user doesn't
-        # have a head document and somebody was able to inject their own
-        # head.  -- brad choate
-        $$htmlref =~ s/<body\b.*//is;
-    };
+    my $doc = $self->_get_url_contents($url, $final_url_ref, \&OpenID::util::_extract_head_markup_only) || '';
 
-    my $doc = $self->_get_url_contents($url, $final_url_ref, $trim_hook) || '';
-
-    # find <head> content of document (notably: the first head, if an attacker
-    # has added others somehow)
-    return $self->_fail("no_head_tag", "Couldn't find OpenID servers due to no head tag")
+    return $self->_fail("no_head_tag")
         unless $doc =~ m!<head[^>]*>(.*?)</head>!is;
     my $head = $1;
 
-    my $ret = {
-        'openid.server' => undef,
-        'openid.delegate' => undef,
-        'foaf' => undef,
-        'foaf.maker' => undef,
-        'rss' => undef,
-        'atom' => undef,
-    };
+    my $ret = {};
 
     # analyze link/meta tags
-    while ($head =~ m!<(link|meta)\b([^>]+)>!g) {
-        my ($type, $val) = ($1, $2);
-        my $temp;
-
-        # OpenID servers / delegated identities
-        # <link rel="openid.server" href="http://www.livejournal.com/misc/openid.bml" />
-        if ($type eq "link" &&
-            $val =~ /\brel=.openid\.(server|delegate)./i && ($temp = $1) &&
-            $val =~ m!\bhref=[\"\']([^\"\']+)[\"\']!i) {
-            $ret->{"openid.$temp"} = $1;
-            next;
+    my @linkmetas = ();
+    while ($head =~ m!<(link|meta)([[:space:]][^>]*?)/?>!ig) {
+        my $tag = lc($1);
+        my $lm = _element_attributes($2);
+        $lm->{' tag'} = $tag;
+        if ($tag eq 'link' && (($lm->{rel}||'') =~ m/[[:space:]]/)) {
+            # split <link rel="foo bar..." href="whatever"... /> into multiple <link>s
+            push @linkmetas, map { +{%{$lm}, rel => $_} } split /[[:space:]]+/,$lm->{rel};
         }
-
-        # OpenID2 providers / local identifiers
-        # <link rel="openid2.provider" href="http://www.livejournal.com/misc/openid.bml" />
-        if ($type eq "link" &&
-            $val =~ /\brel=.openid2\.(provider|local_id)./i && ($temp = $1) &&
-            $val =~ m!\bhref=[\"\']([^\"\']+)[\"\']!i) {
-            $ret->{"openid2.$temp"} = $1;
-            next;
+        else {
+            push @linkmetas, $lm;
         }
+    }
+    for my $lm (@linkmetas) {
+        for (@HTTP_discovery_link_meta_tags) {
+            my ($target, $elt, $vattrib, $string, $attribs) = @$_;
+            next if $elt ne $lm->{' tag'};
 
-        # FOAF documents
-        #<link rel="meta" type="application/rdf+xml" title="FOAF" href="http://brad.livejournal.com/data/foaf" />
-        if ($type eq "link" &&
-            $val =~ m!title=.foaf.!i &&
-            $val =~ m!rel=.meta.!i &&
-            $val =~ m!type=.application/rdf\+xml.!i &&
-            $val =~ m!href=[\"\']([^\"\']+)[\"\']!i) {
-            $ret->{"foaf"} = $1;
-            next;
-        }
+            $string  ||= $target;
+            $attribs ||= [$elt eq 'meta' ? 'name' : 'rel'];
+            next if $string ne join ';', map {lc($lm->{$_})} @$attribs;
 
-        # FOAF maker info
-        # <meta name="foaf:maker" content="foaf:mbox_sha1sum '4caa1d6f6203d21705a00a7aca86203e82a9cf7a'" />
-        if ($type eq "meta" &&
-            $val =~ m!name=.foaf:maker.!i &&
-            $val =~ m!content=([\'\"])(.*?)\1!i) {
-            $ret->{"foaf.maker"} = $2;
-            next;
-        }
-
-        if ($type eq "meta" &&
-            $val =~ m!name=.foaf:maker.!i &&
-            $val =~ m!content=([\'\"])(.*?)\1!i) {
-            $ret->{"foaf.maker"} = $2;
-            next;
-        }
-
-        # RSS
-        # <link rel="alternate" type="application/rss+xml" title="RSS" href="http://www.livejournal.com/~brad/data/rss" />
-        if ($type eq "link" &&
-            $val =~ m!rel=.alternate.!i &&
-            $val =~ m!type=.application/rss\+xml.!i &&
-            $val =~ m!href=[\"\']([^\"\']+)[\"\']!i) {
-            $ret->{"rss"} = $1;
-            next;
-        }
-
-        # Atom
-        # <link rel="alternate" type="application/atom+xml" title="Atom" href="http://www.livejournal.com/~brad/data/rss" />
-        if ($type eq "link" &&
-            $val =~ m!rel=.alternate.!i &&
-            $val =~ m!type=.application/atom\+xml.!i &&
-            $val =~ m!href=[\"\']([^\"\']+)[\"\']!i) {
-            $ret->{"atom"} = $1;
-            next;
+            $ret->{$target} = $lm->{$vattrib};
+            last;
         }
     }
 
@@ -358,7 +431,7 @@ sub _find_openid_server {
 
 sub is_server_response {
     my Net::OpenID::Consumer $self = shift;
-    return $self->_message_mode ? 1 : 0;
+    return $self->message ? 1 : 0;
 }
 
 sub handle_server_response {
@@ -366,19 +439,43 @@ sub handle_server_response {
     my %callbacks_in = @_;
     my %callbacks = ();
 
-    foreach my $cb (qw(not_openid setup_required cancelled verified error)) {
+    foreach my $cb (qw(not_openid cancelled verified error)) {
         $callbacks{$cb} = delete($callbacks_in{$cb}) || sub { Carp::croak("No ".$cb." callback") };
     }
-    Carp::croak("Unknown callbacks ".join(',', keys %callbacks)) if %callbacks_in;
+
+    # backwards compatibility:
+    #   'setup_needed' is expected as of 1.04
+    #   'setup_required' is deprecated but allowed in its place,
+    my $found_setup_callback = 0;
+    foreach my $cb (qw(setup_needed setup_required)) {
+        $callbacks{$cb} = delete($callbacks_in{$cb}) and $found_setup_callback++;
+    }
+    Carp::croak($found_setup_callback > 1
+                ? "Cannot have both setup_needed and setup_required"
+                : "No setup_needed callback")
+        unless $found_setup_callback == 1;
+
+    Carp::croak("Unknown callbacks:  ".join(',', keys %callbacks_in))
+        if %callbacks_in;
 
     unless ($self->is_server_response) {
         return $callbacks{not_openid}->();
     }
 
-    if (my $setup_url = $self->user_setup_url) {
-        return $callbacks{setup_required}->($setup_url);
+    if ($self->setup_needed) {
+        return $callbacks{setup_needed}->()
+          unless ($callbacks{setup_required});
+
+        my $setup_url = $self->user_setup_url;
+        return $callbacks{setup_required}->($setup_url)
+          if $setup_url;
+        # otherwise FALL THROUGH to preserve prior behavior,
+        # Even though this is broken, old clients could have
+        # put a workaround into the 'error' callback to handle
+        # the setup_needed+(setup_url=undef) case
     }
-    elsif ($self->user_cancel) {
+
+    if ($self->user_cancel) {
         return $callbacks{cancelled}->();
     }
     elsif (my $vident = $self->verified_identity) {
@@ -407,11 +504,11 @@ sub _discover_acceptable_endpoints {
     # trim whitespace
     $url =~ s/^\s+//;
     $url =~ s/\s+$//;
-    return $self->_fail("empty_url", "Empty URL") unless $url;
+    return $self->_fail("empty_url") unless $url;
 
     # do basic canonicalization
     $url = "http://$url" if $url && $url !~ m!^\w+://!;
-    return $self->_fail("bogus_url", "Invalid URL") unless $url =~ m!^https?://!i;
+    return $self->_fail("bogus_url") unless $url =~ m!^https?://!i;
     # add a slash, if none exists
     $url .= "/" unless $url =~ m!^https?://.+/!i;
 
@@ -570,11 +667,11 @@ sub claimed_identity {
     # trim whitespace
     $url =~ s/^\s+//;
     $url =~ s/\s+$//;
-    return $self->_fail("empty_url", "Empty URL") unless $url;
+    return $self->_fail("empty_url") unless $url;
 
     # do basic canonicalization
     $url = "http://$url" if $url && $url !~ m!^\w+://!;
-    return $self->_fail("bogus_url", "Invalid URL") unless $url =~ m!^https?://!i;
+    return $self->_fail("bogus_url") unless $url =~ m!^https?://!i;
     # add a slash, if none exists
     $url .= "/" unless $url =~ m!^https?://.+/!i;
 
@@ -611,7 +708,17 @@ sub claimed_identity {
 
 sub user_cancel {
     my Net::OpenID::Consumer $self = shift;
-    return $self->_message_mode eq "cancel";
+    return $self->_message_mode_is("cancel");
+}
+
+sub setup_needed {
+    my Net::OpenID::Consumer $self = shift;
+    if ($self->_message_version == 1) {
+        return $self->_message_mode_is("id_res") && $self->message("user_setup_url");
+    }
+    else {
+        return $self->_message_mode_is('setup_needed');
+    }
 }
 
 sub user_setup_url {
@@ -620,16 +727,13 @@ sub user_setup_url {
     my $post_grant = delete $opts{'post_grant'};
     Carp::croak("Unknown options: " . join(", ", keys %opts)) if %opts;
 
-    my $setup_url = undef;
-
     if ($self->_message_version == 1) {
-        return $self->_fail("bad_mode") unless $self->_message_mode eq "id_res";
-        $setup_url = $self->message("user_setup_url");
+        return $self->_fail("bad_mode") unless $self->_message_mode_is("id_res");
     }
     else {
-        return undef unless $self->_message_mode eq 'setup_needed';
-        $setup_url = $self->message("user_setup_url");
+        return undef unless $self->_message_mode_is('setup_needed');
     }
+    my $setup_url = $self->message("user_setup_url");
 
     OpenID::util::push_url_arg(\$setup_url, "openid.post_grant", $post_grant)
         if $setup_url && $post_grant;
@@ -644,7 +748,7 @@ sub verified_identity {
     my $rr = delete $opts{'required_root'} || $self->{required_root};
     Carp::croak("Unknown options: " . join(", ", keys %opts)) if %opts;
 
-    return $self->_fail("bad_mode") unless $self->_message_mode eq "id_res";
+    return $self->_fail("bad_mode") unless $self->_message_mode_is("id_res");
 
     # the asserted identity (the delegated one, if there is one, since the protocol
     # knows nothing of the original URL)
@@ -800,10 +904,7 @@ sub verified_identity {
             $unsigned_fields{$f}++ if !$signed_fields{$f};
         }
         if (%unsigned_fields) {
-            return $self->_fail(
-                "unsigned_field",
-                "Field(s) must be signed: " . join(", ", keys %unsigned_fields)
-            );
+            return $self->_fail("unsigned_field", undef, keys %unsigned_fields);
         }
     }
 
@@ -821,7 +922,8 @@ sub verified_identity {
             $signed_fields{$param} = $val;
         }
 
-        my $good_sig = OpenID::util::b64(hmac_sha1($token, $assoc->secret));
+        utf8::encode($token);
+        my $good_sig = $assoc->generate_signature($token);
         return $self->_fail("signature_mismatch") unless OpenID::util::timing_indep_eq($sig64, $good_sig);
 
     } else {
@@ -916,7 +1018,7 @@ Net::OpenID::Consumer - Library for consumers of OpenID identities
 
 =head1 VERSION
 
-version 1.030099_005
+version 1.030099_006
 
 =head1 SYNOPSIS
 
@@ -953,9 +1055,9 @@ version 1.030099_005
       not_openid => sub {
           die "Not an OpenID message";
       },
-      setup_required => sub {
-          my $setup_url = shift;
-          # Redirect the user to $setup_url
+      setup_needed => sub {
+          # (openID 1) redirect user to $csr->user_setup_url
+          # (openID 2) retry request in checkid_setup mode
       },
       cancelled => sub {
           # Do something appropriate when the user hits "cancel" at the OP
@@ -971,8 +1073,11 @@ version 1.030099_005
   );
 
   # ... or handle the various cases yourself
-  if (my $setup_url = $csr->user_setup_url) {
-       # redirect/link/popup user to $setup_url
+  unless ($the_csr->is_server_response) {
+      die "Not an OpenID message";
+  } elsif ($csr->setup_needed) {
+       # (openID 1) redirect/link/popup user to $self->user_setup_url
+       # (openID 2) retry request in checkid_setup mode
   } elsif ($csr->user_cancel) {
        # restore web app state to prior to check_url
   } elsif (my $vident = $csr->verified_identity) {
@@ -1058,11 +1163,50 @@ Your secret may not exceed 255 characters.
 
 Get or set the minimum OpenID protocol version supported. Currently
 the only useful value you can set here is 2, which will cause
-1.1 identifiers to fail discovery with the error C<protocol_version_incorrect>.
+1.1 identifiers to fail discovery with the error C<protocol_version_incorrect>
+and responses from version 1 providers to not be recognized.
 
 In most cases you'll want to allow both 1.1 and 2.0 identifiers,
 which is the default. If you want, you can set this property to 1
 to make this behavior explicit.
+
+=item $csr->assoc_options(...)
+
+=item $csr->assoc_options
+
+Get or sets the hash of parameters that determine how associations
+with servers will be made.  Available options include
+
+=over 4
+
+=item assoc_type
+
+Association type, (default 'HMAC-SHA1')
+
+=item session_type
+
+Association session type, (default 'DH-SHA1')
+
+=item max_encrypt
+
+(default FALSE) Use best encryption available for protocol version
+for both session type and association type.
+This overrides C<session_type> and C<assoc_type>
+
+=item session_no_encrypt_https
+
+(default FALSE) Use an unencrypted session type if server is https
+This overrides C<max_encrypt> if both are set.
+
+=item allow_eavesdropping
+
+(default FALSE)  Because it is generally a bad idea, we abort
+assocations where an unencrypted session over a non-SSL
+connection is called for.  However the OpenID 1.1 specification
+technically allows this, so if that is what you really want,
+set this flag true.  Ignored under protocol version 2.
+
+=back
 
 =item $csr->B<message>($key)
 
@@ -1093,7 +1237,7 @@ If you pass in an Apache $r object, you must not have already called
 $r->content as the consumer module will want to get the request
 arguments out of here in the case of a POST request.
 
-2. Get a paramater:
+2. Get a parameter:
 
 my $foo = $csr->args("foo");
 
@@ -1166,9 +1310,9 @@ The available callbacks are:
 
 =item B<not_openid> - the request isn't an OpenID response after all.
 
-=item B<setup_required>($setup_url) - the provider needs to present some UI to the user before it can respond. Send the user to the given URL by some means.
+=item B<setup_needed>() - a checkid_immediate mode request was rejected, indicating that the provider requires user interaction.
 
-=item B<cancelled> - the user cancelled the authentication request from the provider's UI
+=item B<cancelled> - the user cancelled the authentication request from the provider's UI.
 
 =item B<verified>($verified_identity) - the user's identity has been successfully verified. A L<Net::OpenID::VerifiedIdentity> object is passed in.
 
@@ -1176,13 +1320,54 @@ The available callbacks are:
 
 =back
 
+For the sake of legacy code we also allow
+
+=over 8
+
+=item B<setup_required>($setup_url) - [DEPRECATED] a checkid_immediate mode request was rejected AND $setup_url was provided.
+
+=back
+
+however clients using this callback should be updated to use B<setup_needed>
+at the earliest opportunity.  Here $setup_url is the same as returned by
+B<user_setup_url>.
+
+=item $csr->B<setup_needed>
+
+Returns true if a checkid_immediate request failed because the provider
+requires user interaction.  The correct action to take at this point
+depends on the OpenID protocol version
+
+(Version 1) Redirect to or otherwise make available a link to
+C<$csr>->C<user_setup_url>.
+
+(Version 2) Retry the request in checkid_setup mode; the provider will
+then issue redirects as needed.
+
+=over
+
+B<N.B.>: While some providers have been known to supply the C<user_setup_url>
+parameter in Version 2 C<setup_needed> responses, you I<cannot> rely on this,
+and, moreover, since the OpenID 2.0 specification has nothing to say about
+the meaning of such a parameter, you cannot rely on it meaning anything
+in particular even if it is supplied.
+
+=back
+
 =item $csr->B<user_setup_url>( [ %opts ] )
 
-Returns the URL the user must return to in order to login, setup trust,
-or do whatever the identity server needs them to do in order to make
-the identity assertion which they previously initiated by entering
-their claimed identity URL.  Returns undef if this setup URL isn't
-required, in which case you should ask for the verified_identity.
+(Version 1 only) Returns the URL the user must return to in order to
+login, setup trust, or do whatever the identity server needs them to
+do in order to make the identity assertion which they previously
+initiated by entering their claimed identity URL.
+
+=over
+
+B<N.B.>: Checking whether C<user_setup_url> is set in order to determine
+whether a checkid_immediate request failed is DEPRECATED and will fail
+under OpenID 2.0.  Use C<setup_needed()> instead.
+
+=back
 
 The base URL this this function returns can be modified by using the
 following options in %opts:
