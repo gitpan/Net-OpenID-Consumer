@@ -4,7 +4,7 @@ use Carp ();
 ############################################################################
 package Net::OpenID::ClaimedIdentity;
 BEGIN {
-  $Net::OpenID::ClaimedIdentity::VERSION = '1.030099_006';
+  $Net::OpenID::ClaimedIdentity::VERSION = '1.100099_001';
 }
 use fields (
     'identity',         # the canonical URL that was found, following redirects
@@ -213,7 +213,7 @@ Net::OpenID::ClaimedIdentity - A not-yet-verified OpenID identity
 
 =head1 VERSION
 
-version 1.030099_006
+version 1.100099_001
 
 =head1 SYNOPSIS
 

@@ -27,12 +27,12 @@ my %WriteMakefileArgs = (
     'JSON' => '0',
     'LWP::UserAgent' => '0',
     'MIME::Base64' => '0',
-    'Net::OpenID::Common' => '1.030099_004',
+    'Net::OpenID::Common' => '1.12',
     'Storable' => '0',
     'Time::Local' => '0',
     'URI' => '0'
   },
-  'VERSION' => '1.030099_006',
+  'VERSION' => '1.100099_001',
   'test' => {
     'TESTS' => 't/*.t'
   }

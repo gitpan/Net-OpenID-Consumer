@@ -6,7 +6,7 @@ use Carp ();
 ############################################################################
 package Net::OpenID::Consumer;
 BEGIN {
-  $Net::OpenID::Consumer::VERSION = '1.030099_006';
+  $Net::OpenID::Consumer::VERSION = '1.100099_001';
 }
 
 
@@ -40,6 +40,7 @@ use LWP::UserAgent;
 use Storable;
 use JSON qw(encode_json);
 use URI::Escape qw(uri_escape);
+use HTML::Parser;
 
 sub new {
     my Net::OpenID::Consumer $self = shift;
@@ -277,144 +278,119 @@ sub errtext {
     $self->{last_errtext};
 }
 
+# make sure you change the $prefix every time you change the $hook format
+# so that when user installs a new version and the old cache server is
+# still running the old cache entries won't confuse things.
 sub _get_url_contents {
     my Net::OpenID::Consumer $self = shift;
-    my ($url, $final_url_ref, $hook) = @_;
+    my ($url, $final_url_ref, $hook, $prefix) = @_;
     $final_url_ref ||= do { my $dummy; \$dummy; };
 
-    my $res = Net::OpenID::URIFetch->fetch($url, $self, $hook);
+    my $res = Net::OpenID::URIFetch->fetch($url, $self, $hook, $prefix);
 
     $$final_url_ref = $res->final_uri;
 
     return $res ? $res->content : undef;
 }
 
-sub _element_attributes {
-    local $_ = shift;
-    my %a = ();
-    while (m!\G[[:space:]]+([^[:space:]=]+)(?:=(?:([-a-zA-Z0-9._:]+)|'([^\']+)'|"([^\"]+)")([^[:space:]]*))?!g) {
-        next if $5; # skip malformed attributes
-        my $v = (defined $2 ? $2 : defined $3 ? $3 : $4);
-        $a{lc($1)} = $v if defined $v;
-    }
-    return \%a;
-}
 
 # List of head elements that matter for HTTP discovery.
-# Each entry defines a key for the _find_semantic_info hash
+# Each entry defines a key+value that will appear in the
+# _find_semantic_info hash if the specified element exists
 #  [
-#    KEY         -- key name
-#    ELEMENT     -- html element name, must be 'link' or 'meta'
-#    ATTR        -- html attribute name (where key value lives)
-#    MATCH_VALUE -- string (default = KEY)
-#    MATCH_ATTRS -- list-ref of html attribute names
-#            default = ['rel']  if ELEMENT is <link...>
-#            default = ['name'] if ELEMENT is <meta...>
+#    FSI_KEY    -- key name
+#    TAG_NAME   -- must be 'link' or 'meta'
+#
+#    ELT_VALUES -- string (default = FSI_KEY)
+#            what join(';',values of ELT_KEYS) has to match
+#            in order for a given html element to provide
+#            the value for FSI_KEY
+#
+#    ELT_KEYS   -- list-ref of html attribute names
+#            default = ['rel']  for <link...>
+#            default = ['name'] for <meta...>
+#
+#    FSI_VALUE  -- name of html attribute where value lives
+#            default = 'href'    for <link...>
+#            default = 'content' for <meta...>
 #  ]
-#  _find_semantic_info->{KEY} =
-#    ATTR value of the ELEMENT for which
-#    MATCH_VALUE == ;-join of MATCH_ATTRS values
 #
 our @HTTP_discovery_link_meta_tags =
-  (
+  map {
+      my ($fsi_key, $tag, $elt_value, $elt_keys, $fsi_value) = @{$_};
+      [$fsi_key, $tag,
+       $elt_value || $fsi_key,
+       $elt_keys  || [$tag eq 'link' ? 'rel'  : 'name'],
+       $fsi_value || ($tag eq 'link' ? 'href' : 'content'),
+      ]
+  }
    # OpenID servers / delegated identities
    # <link rel="openid.server"
    #       href="http://www.livejournal.com/misc/openid.bml" />
    # <link rel="openid.delegate"
    #       href="whatever" />
    #
-   [qw(openid.server    link  href)], # 'openid.server'==.rel (<link> default)
-   [qw(openid.delegate  link  href)],
+   [qw(openid.server    link)], # 'openid.server' => ['rel'], 'href'
+   [qw(openid.delegate  link)],
 
    # OpenID2 providers / local identifiers
    # <link rel="openid2.provider"
    #       href="http://www.livejournal.com/misc/openid.bml" />
    # <link rel="openid2.local_id" href="whatever" />
    #
-   [qw(openid2.provider  link  href)],
-   [qw(openid2.local_id  link  href)],
+   [qw(openid2.provider  link)],
+   [qw(openid2.local_id  link)],
 
    # FOAF maker info
    # <meta name="foaf:maker"
    #  content="foaf:mbox_sha1sum '4caa1d6f6203d21705a00a7aca86203e82a9cf7a'"/>
    #
-   [qw(foaf.maker  meta content foaf:maker)], # == .name  (<meta> default)
+   [qw(foaf.maker  meta  foaf:maker)], # == .name
 
    # FOAF documents
    # <link rel="meta" type="application/rdf+xml" title="FOAF"
    #       href="http://brad.livejournal.com/data/foaf" />
    #
-   [qw(foaf  link  href  meta;foaf;application/rdf+xml),  [qw(rel title type)]],
+   [qw(foaf link), 'meta;foaf;application/rdf+xml' => [qw(rel title type)]],
 
    # RSS
    # <link rel="alternate" type="application/rss+xml" title="RSS"
    #       href="http://www.livejournal.com/~brad/data/rss" />
    #
-   [qw(rss   link  href  alternate;application/rss+xml),  [qw(rel type)]],
+   [qw(rss link), 'alternate;application/rss+xml' => [qw(rel type)]],
 
    # Atom
    # <link rel="alternate" type="application/atom+xml" title="Atom"
    #       href="http://www.livejournal.com/~brad/data/rss" />
    #
-   [qw(atom  link  href  alternate;application/atom+xml), [qw(rel type)]],
-  );
+   [qw(atom link), 'alternate;application/atom+xml' => [qw(rel type)]],
+  ;
+
+sub _document_to_semantic_info {
+    my $doc = shift;
+    my $info = {};
+
+    my $elts = OpenID::util::html_extract_linkmetas($doc);
+    for (@HTTP_discovery_link_meta_tags) {
+        my ($key, $tag, $string, $attribs, $vattrib) = @$_;
+        for my $lm (@{$elts->{$tag}}) {
+            $info->{$key} = $lm->{$vattrib}
+              if $string eq join ';', map {lc($lm->{$_})} @$attribs;
+        }
+    }
+    return $info;
+}
 
 sub _find_semantic_info {
     my Net::OpenID::Consumer $self = shift;
     my $url = shift;
     my $final_url_ref = shift;
 
-    my $doc = $self->_get_url_contents($url, $final_url_ref, \&OpenID::util::_extract_head_markup_only) || '';
+    my $doc = $self->_get_url_contents($url, $final_url_ref);
+    my $info = _document_to_semantic_info($doc);
+    $self->_debug("semantic info ($url) = " . join(", ", map { $_.' => '.$info->{$_} } keys %$info)) if $self->{debug};
 
-    return $self->_fail("no_head_tag")
-        unless $doc =~ m!<head[^>]*>(.*?)</head>!is;
-    my $head = $1;
-
-    my $ret = {};
-
-    # analyze link/meta tags
-    my @linkmetas = ();
-    while ($head =~ m!<(link|meta)([[:space:]][^>]*?)/?>!ig) {
-        my $tag = lc($1);
-        my $lm = _element_attributes($2);
-        $lm->{' tag'} = $tag;
-        if ($tag eq 'link' && (($lm->{rel}||'') =~ m/[[:space:]]/)) {
-            # split <link rel="foo bar..." href="whatever"... /> into multiple <link>s
-            push @linkmetas, map { +{%{$lm}, rel => $_} } split /[[:space:]]+/,$lm->{rel};
-        }
-        else {
-            push @linkmetas, $lm;
-        }
-    }
-    for my $lm (@linkmetas) {
-        for (@HTTP_discovery_link_meta_tags) {
-            my ($target, $elt, $vattrib, $string, $attribs) = @$_;
-            next if $elt ne $lm->{' tag'};
-
-            $string  ||= $target;
-            $attribs ||= [$elt eq 'meta' ? 'name' : 'rel'];
-            next if $string ne join ';', map {lc($lm->{$_})} @$attribs;
-
-            $ret->{$target} = $lm->{$vattrib};
-            last;
-        }
-    }
-
-    # map the 4 entities that the spec asks for
-    my $emap = {
-        'lt' => '<',
-        'gt' => '>',
-        'quot' => '"',
-        'amp' => '&',
-    };
-    foreach my $k (keys %$ret) {
-        next unless $ret->{$k};
-        $ret->{$k} =~ s/&(\w+);/$emap->{$1} || ""/eg;
-    }
-
-    $self->_debug("semantic info ($url) = " . join(", ", map { $_.' => '.$ret->{$_} } keys %$ret)) if $self->{debug};
-
-    return $ret;
+    return $info;
 }
 
 sub _find_openid_server {
@@ -434,6 +410,7 @@ sub is_server_response {
     return $self->message ? 1 : 0;
 }
 
+my $_warned_about_setup_required = 0;
 sub handle_server_response {
     my Net::OpenID::Consumer $self = shift;
     my %callbacks_in = @_;
@@ -454,6 +431,15 @@ sub handle_server_response {
                 ? "Cannot have both setup_needed and setup_required"
                 : "No setup_needed callback")
         unless $found_setup_callback == 1;
+
+    if (warnings::enabled('deprecated') &&
+        $callbacks{setup_required} &&
+        !$_warned_about_setup_required++
+       ) {
+        warnings::warn
+            ("deprecated",
+             "'setup_required' callback is deprecated, use 'setup_needed'");
+    }
 
     Carp::croak("Unknown callbacks:  ".join(',', keys %callbacks_in))
         if %callbacks_in;
@@ -930,31 +916,47 @@ sub verified_identity {
         $self->_debug("verified_identity: verifying using HTTP (dumb mode)");
         # didn't find an association.  have to do dumb consumer mode
         # and check it with a POST
-        my %post = (
-                    "openid.mode"         => "check_authentication",
-                    "openid.assoc_handle" => $assoc_handle,
-                    "openid.signed"       => $signed,
-                    "openid.sig"          => $sig64,
+        my %post;
+        my @mkeys;
+        if ($self->_message_version >= 2
+            && (@mkeys = $self->message->all_parameters)) {
+            # OpenID 2.0: copy *EVERYTHING*, not just signed parameters.
+            # (XXX:  Do we need to copy non "openid." parameters as well?
+            #  For now, assume if provider is sending them, there is a reason)
+            %post = map {$_ eq 'openid.mode' ? () : ($_, $self->args($_)) } @mkeys;
+        }
+        else {
+            # OpenID 1.1 *OR* legacy client did not provide a proper
+            # enumerator; in the latter case under 2.0 we have no
+            # choice but to send a partial (1.1-style)
+            # check_authentication request and hope for the best.
+
+            %post = (
+                     "openid.assoc_handle" => $assoc_handle,
+                     "openid.signed"       => $signed,
+                     "openid.sig"          => $sig64,
                     );
 
-        if ($self->_message_version >= 2) {
-            $post{'openid.ns'} = OpenID::util::VERSION_2_NAMESPACE();
-        }
+            if ($self->_message_version >= 2) {
+                $post{'openid.ns'} = OpenID::util::VERSION_2_NAMESPACE();
+            }
 
-        # and copy in all signed parameters that we don't already have into %post
-        foreach my $param (split(/,/, $signed)) {
-            next unless $param =~ /^[\w\.]+$/;
-            my $val = $self->args('openid.'.$param);
-            $signed_fields{$param} = $val;
-            next if $post{"openid.$param"};
-            $post{"openid.$param"} = $val;
-        }
+            # and copy in all signed parameters that we don't already have into %post
+            foreach my $param (split(/,/, $signed)) {
+                next unless $param =~ /^[\w\.]+$/;
+                my $val = $self->args('openid.'.$param);
+                $signed_fields{$param} = $val;
+                next if $post{"openid.$param"};
+                $post{"openid.$param"} = $val;
+            }
 
-        # if the server told us our handle as bogus, let's ask in our
-        # check_authentication mode whether that's true
-        if (my $ih = $self->message("invalidate_handle")) {
-            $post{"openid.invalidate_handle"} = $ih;
+            # if the server told us our handle as bogus, let's ask in our
+            # check_authentication mode whether that's true
+            if (my $ih = $self->message("invalidate_handle")) {
+                $post{"openid.invalidate_handle"} = $ih;
+            }
         }
+        $post{"openid.mode"} = "check_authentication";
 
         my $req = HTTP::Request->new(POST => $server);
         $req->header("Content-Type" => "application/x-www-form-urlencoded");
@@ -963,8 +965,8 @@ sub verified_identity {
         my $ua  = $self->ua;
         my $res = $ua->request($req);
 
-        # uh, some failure, let's go into dumb mode?
-        return $self->_fail("naive_verify_failed_network") unless $res && $res->is_success;
+        return $self->_fail("naive_verify_failed_network")
+          unless $res && $res->is_success;
 
         my $content = $res->content;
         my %args = OpenID::util::parse_keyvalue($content);
@@ -1018,7 +1020,7 @@ Net::OpenID::Consumer - Library for consumers of OpenID identities
 
 =head1 VERSION
 
-version 1.030099_006
+version 1.100099_001
 
 =head1 SYNOPSIS
 
@@ -1229,13 +1231,17 @@ Can be used in 1 of 3 ways:
 
 $csr->args( $reference )
 
-Where $reference is either a HASH ref, CODE ref, Apache $r,
-Apache::Request $apreq, or CGI.pm $cgi.  If a CODE ref, the subref
-must return the value given one argument (the parameter to retrieve)
+Where $reference is either a HASH ref, a CODE ref, or a "request object".
+Currently recognized request objects include Apache, Apache::Request,
+Apache2::Request, Plack::Request, and CGI.
 
-If you pass in an Apache $r object, you must not have already called
-$r->content as the consumer module will want to get the request
-arguments out of here in the case of a POST request.
+If you pass in a CODE ref, it must, if given a single URL parameter
+name argument, return that parameter value B<and>, if given no arguments
+at all, return the full list of parameter names from the request.
+
+If you pass in an Apache (Apache 1 RequestRec) object, you must not
+have already called $r->content as the consumer module will want to
+get the request arguments out of here in the case of a POST request.
 
 2. Get a parameter:
 
