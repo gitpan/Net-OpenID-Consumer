@@ -6,12 +6,13 @@ use Carp ();
 ############################################################################
 package Net::OpenID::Consumer;
 BEGIN {
-  $Net::OpenID::Consumer::VERSION = '1.100099_001';
+  $Net::OpenID::Consumer::VERSION = '1.100099_002';
 }
 
 
 use fields (
-    'cache',           # a Cache object to store HTTP responses and associations
+    'cache',           # Cache object to store HTTP responses,
+                       #   associations, and nonces
     'ua',              # LWP::UserAgent instance to use
     'args',            # how to get at your args
     'message',         # args interpreted as an IndirectMessage, if possible
@@ -21,7 +22,8 @@ use fields (
     'last_errtext',    # last error code we got
     'debug',           # debug flag or codeblock
     'minimum_version', # The minimum protocol version to support
-    'assoc_options',   # options for establishing server associations
+    'assoc_options',   # options for establishing ID provider associations
+    'nonce_options',   # options for dealing with nonces
 );
 
 use Net::OpenID::ClaimedIdentity;
@@ -54,6 +56,7 @@ sub new {
     $self->required_root   ( delete $opts{required_root}   );
     $self->minimum_version ( delete $opts{minimum_version} );
     $self->assoc_options   ( delete $opts{assoc_options}   );
+    $self->nonce_options   ( delete $opts{nonce_options}   );
 
     $self->{debug} = delete $opts{debug};
 
@@ -72,6 +75,8 @@ sub disable_version_1 {
 sub cache           { &_getset; }
 sub consumer_secret { &_getset; }
 sub required_root   { &_getset; }
+sub assoc_options   { &_hashgetset }
+sub nonce_options   { &_hashgetset }
 
 sub _getset {
     my Net::OpenID::Consumer $self = shift;
@@ -86,20 +91,12 @@ sub _getset {
     return $self->{$param};
 }
 
-sub minimum_version {
+sub _hashgetset {
     my Net::OpenID::Consumer $self = shift;
+    my $param = (caller(1))[3];
+    $param =~ s/.+:://;
+    my $check_param = "_canonicalize_$param";
 
-    if (@_) {
-        my $minv = shift;
-        Carp::croak("Too many parameters") if @_;
-        $minv = 1 unless $minv && $minv > 1;
-        $self->{minimum_version} = $minv;
-    }
-    return $self->{minimum_version};
-}
-
-sub assoc_options {
-    my Net::OpenID::Consumer $self = shift;
     my $v;
     if (scalar(@_) == 1) {
         $v = shift;
@@ -116,15 +113,29 @@ sub assoc_options {
         else {
             Carp::croak("single argument must be HASH or ARRAY reference");
         }
-        $self->{assoc_options} = $v;
+        $self->{$param} = $self->$check_param($v);
     }
     elsif (@_) {
         Carp::croak("odd number of parameters?")
             if scalar(@_)%2;
-        $self->{assoc_options} = {@_};
+        $self->{$param} = $self->$check_param({@_});
     }
-    return $self->{assoc_options};
+    return $self->{$param};
 }
+
+sub minimum_version {
+    my Net::OpenID::Consumer $self = shift;
+
+    if (@_) {
+        my $minv = shift;
+        Carp::croak("Too many parameters") if @_;
+        $minv = 1 unless $minv && $minv > 1;
+        $self->{minimum_version} = $minv;
+    }
+    return $self->{minimum_version};
+}
+
+sub _canonicalize_assoc_options { return $_[1]; }
 
 sub _debug {
     my Net::OpenID::Consumer $self = shift;
@@ -236,6 +247,11 @@ our %Error_text =
     'time_in_future'              => "Return_to signature is from the future.",
     'unsigned_field'              => sub { "Field(s) must be signed: " . join(", ", @_) },
     'url_fetch_err'               => "Error fetching the provided URL.",
+    'nonce_reused'                => 'Re-used response_nonce; possible replay attempt.',
+    'nonce_stale'                 => 'Stale response_nonce; could have been used before.',
+    'nonce_format'                => 'Bad timestamp format in response_nonce.',
+    'nonce_future'                => 'Provider clock is too far forward.',
+
    );
 
 sub _fail {
@@ -324,7 +340,7 @@ our @HTTP_discovery_link_meta_tags =
        $fsi_value || ($tag eq 'link' ? 'href' : 'content'),
       ]
   }
-   # OpenID servers / delegated identities
+   # OpenID providers / delegated identities
    # <link rel="openid.server"
    #       href="http://www.livejournal.com/misc/openid.bml" />
    # <link rel="openid.delegate"
@@ -372,10 +388,10 @@ sub _document_to_semantic_info {
 
     my $elts = OpenID::util::html_extract_linkmetas($doc);
     for (@HTTP_discovery_link_meta_tags) {
-        my ($key, $tag, $string, $attribs, $vattrib) = @$_;
+        my ($key, $tag, $elt_value, $elt_keys, $vattrib) = @$_;
         for my $lm (@{$elts->{$tag}}) {
             $info->{$key} = $lm->{$vattrib}
-              if $string eq join ';', map {lc($lm->{$_})} @$attribs;
+              if $elt_value eq join ';', map {lc($lm->{$_}||'')} @$elt_keys;
         }
     }
     return $info;
@@ -536,10 +552,8 @@ sub _discover_acceptable_endpoints {
                 my @sorted_id_servers = sort {
                     my $pa = $a->{priority};
                     my $pb = $b->{priority};
-                    return 0 unless defined($pa) || defined($pb);
-                    return -1 unless defined ($pb);
-                    return 1 unless defined ($pa);
-                    return $a->{priority} <=> $b->{priority}
+                    defined($pb) <=> defined($pa)
+                      || (defined($pa) ? ($pa <=> $pb) : 0)
                 } @$service_uris;
                 $service_uris = \@sorted_id_servers;
             }
@@ -742,7 +756,7 @@ sub verified_identity {
 
     my $sig64    = $self->message("sig")          or return $self->_fail("no_sig");
 
-    # fix sig if the OpenID auth server failed to properly escape pluses (+) in the sig
+    # fix sig if the OpenID provider failed to properly escape pluses (+) in the sig
     $sig64 =~ s/ /+/g;
 
     my $returnto = $self->message("return_to")    or return $self->_fail("no_return_to");
@@ -771,7 +785,7 @@ sub verified_identity {
     else {
         $real_ident = $self->message("claimed_id") || $a_ident;
 
-        # In version 2, the OP tells us its URL.
+        # In version 2, the OpenID provider tells us its URL.
         $server = $self->message("op_endpoint");
         $possible_endpoints = $self->_discover_acceptable_endpoints($real_ident, force_version => 2);
 
@@ -788,8 +802,20 @@ sub verified_identity {
     # check that returnto is for the right host
     return $self->_fail("bogus_return_to") if $rr && $returnto !~ /^\Q$rr\E/;
 
-    # check age/signature of return_to
     my $now = time();
+
+    # check that we have not seen response_nonce before
+    my $response_nonce = $self->message("response_nonce");
+    unless ($response_nonce) {
+        # 1.0/1.1 does not require nonces
+        return $self->_fail("nonce_missing")
+          if $self->_message_version == 2;
+    }
+    else {
+        return unless $self->_nonce_check_succeeds($now, $server, $response_nonce);
+    }
+
+    # check age/signature of return_to
     {
         my ($sig_time, $sig) = split(/\-/, $self->args("oic.time") || "");
         # complain if more than an hour since we sent them off
@@ -815,7 +841,7 @@ sub verified_identity {
             $last_error = $_[0];
         };
 
-        # The endpoint_uri must match our $server
+        # The endpoint_uri must match our $server (provider)
         if ($endpoint_uri ne $server) {
             $error->("server_not_allowed");
             next;
@@ -950,7 +976,7 @@ sub verified_identity {
                 $post{"openid.$param"} = $val;
             }
 
-            # if the server told us our handle as bogus, let's ask in our
+            # if the provider told us our handle as bogus, let's ask in our
             # check_authentication mode whether that's true
             if (my $ih = $self->message("invalidate_handle")) {
                 $post{"openid.invalidate_handle"} = $ih;
@@ -1011,6 +1037,122 @@ sub _get_consumer_secret {
     return $sec;
 }
 
+our $nonce_default_delay = 1200;
+our $nonce_default_skew = 300;
+
+sub _canonicalize_nonce_options {
+    my Net::OpenID::Consumer $self = shift;
+    my $o = shift;
+    my ($no_check,$ignore_time,$lifetime,$window,$start,$skew,$timecop) =
+      delete @{$o}{qw(no_check ignore_time lifetime window start skew timecop)};
+    Carp::croak("Unrecognized nonce_options: ".join(',',keys %$o))
+        if keys %$o;
+
+    return +{ no_check => 1 }
+      if ($no_check);
+
+    return +{ window => 0,
+              lifetime => ($lifetime && $lifetime > 0 ? $lifetime : 0),
+            }
+      if ($ignore_time);
+
+    $window =
+      defined($lifetime) ? $lifetime :
+        $nonce_default_delay + 2*(defined($skew) && $skew > $nonce_default_skew
+                                  ? $skew : $nonce_default_skew)
+      unless (defined($window));
+
+    $lifetime = $window
+      unless (defined($lifetime));
+
+    $lifetime = 0 if $lifetime < 0;
+    $window = 0 if $window < 0;
+
+    $skew = $window < 2*$nonce_default_skew ? $window/2 : $nonce_default_skew
+      unless (defined($skew));
+
+    Carp::croak("Unrecognized nonce_options: ".join(',',keys %$o))
+        if keys %$o;
+
+    return
+      +{
+        window => $window,
+        lifetime => $lifetime,
+        skew => $skew,
+        defined($start)  ? (start => $start) : (),
+       };
+}
+
+# The contract:
+#     IF the provider adheres to protocol and is properly configured
+#     which, for our purposes here means
+#       (1) it sends properly formatted nonces
+#           that reflect provider clock time and
+#       (2) provider clock is not skewed from our own by more than
+#           <skew> (the maximum acceptable)
+#     AND
+#       we have a cache that can reliably hold onto entries
+#       for at least <lifetime> seconds
+#     THEN we must not accept a duplicate nonce.
+#
+# Preconditions imply that no message with this nonce will be received
+# prior to <nonce_time>-<skew> (i.e., provider clock is running
+# maximally fast and there is no transmission delay).  If our cache
+# start time is prior to this and the lifetime of cache entries is
+# long enough, then we can know for certain that it's not a duplicate,
+# otherwise we do not and therefore must reject it.
+#
+# If we detect an instance where preconditions do not hold, there is
+# not much we can do: rejecting nonces in this case will not make the
+# protocol more secure.  As long as the provider's clock is skewed too
+# far forward, an attacker will be able to take advantage of it.  Best
+# we can do is issue warnings, which is the point of 'timecop', but if
+# there's no place to send the warnings, then it's a waste of time.
+#
+sub _nonce_check_succeeds {
+    my Net::OpenID::Consumer $self = shift;
+    my ($now, $uri, $nonce) = @_;
+
+    my $o = $self->nonce_options;
+    my $cache = $self->cache;
+    return 1
+      if $o->{no_check} || !$cache;
+
+    my $cache_key = "nonce:$uri:$nonce";
+
+    return $self->_fail('nonce_reused') if ($cache->get($cache_key));
+    $cache->set($cache_key, 1,
+                ($o->{lifetime} ? ($now + $o->{lifetime}) : ()));
+
+    return 1
+      unless $o->{window} || $o->{start};
+
+    # parse RFC3336 timestamp restricted as per 10.1
+    my ($year,$mon,$day,$hour,$min,$sec) =
+      $nonce =~ m/^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z/
+      or return $self->_fail('nonce_format');
+
+    # $nonce_time is a lower bound on when the nonce could have been
+    # received according to our clock
+    my $nonce_time = eval { timegm($sec,$min,$hour,$day,$mon-1,$year) - $o->{skew} };
+    return $self->_fail('nonce_format') if $@;
+
+    # nonces from the future indicate misconfigured providers
+    # that we can do nothing about except give warnings
+    return !$o->{timecop} || $self->_fail('nonce_future')
+        if ($now < $nonce_time);
+
+    # the check that matters
+    return $self->_fail('nonce_stale')
+      if   ($o->{window} && $nonce_time < $now - $o->{window})
+        || ($o->{start} && $nonce_time < $o->{start});
+
+    # win
+    return 1;
+}
+
+
+
 1;
 __END__
 
@@ -1020,7 +1162,7 @@ Net::OpenID::Consumer - Library for consumers of OpenID identities
 
 =head1 VERSION
 
-version 1.100099_001
+version 1.100099_002
 
 =head1 SYNOPSIS
 
@@ -1040,7 +1182,7 @@ version 1.100099_001
 
   my $claimed_identity = $csr->claimed_identity("bradfitz.com");
 
-  # now your app has to send them at their identity server's endpoint
+  # now your app has to send them at their identity provider's endpoint
   # to get redirected to either a positive assertion that they own
   # that identity, or where they need to go to login/setup trust/etc.
 
@@ -1050,7 +1192,7 @@ version 1.100099_001
   );
 
   # so you send the user off there, and then they come back to
-  # openid-check.app, then you see what the identity server said.
+  # openid-check.app, then you see what the identity provider said.
 
   # Either use callback-based API (recommended)...
   $csr->handle_server_response(
@@ -1078,7 +1220,7 @@ version 1.100099_001
   unless ($the_csr->is_server_response) {
       die "Not an OpenID message";
   } elsif ($csr->setup_needed) {
-       # (openID 1) redirect/link/popup user to $self->user_setup_url
+       # (openID 1) redirect/link/popup user to $csr->user_setup_url
        # (openID 2) retry request in checkid_setup mode
   } elsif ($csr->user_cancel) {
        # restore web app state to prior to check_url
@@ -1106,13 +1248,60 @@ identity.  More information is available at:
 
 my $csr = Net::OpenID::Consumer->new([ %opts ]);
 
-You can set the C<ua>, C<cache>, C<consumer_secret>, C<required_root>,
-C<minimum_version> and C<args> in the constructor.  See the corresponding
-method descriptions below.
+You can set the
+C<ua>,
+C<cache>,
+C<args>,
+C<consumer_secret>,
+C<minimum_version>,
+C<required_root>,
+C<assoc_options>, and
+C<nonce_options>
+in the constructor.  See the corresponding method descriptions below.
 
 =back
 
 =head1 METHODS
+
+=head2 State
+
+=over 4
+
+=item $csr->B<message>($key)
+
+Returns the value for the given key/field from the OpenID protocol
+message contained in the request URL parameters (i.e., the value for
+the URL parameter C<openid.$key>).
+This can only be used to obtain core OpenID fields not extension fields.
+
+Calling this method without a C<$key> argument returns a
+L<Net::OpenID::IndirectMessage|Net::OpenID::IndirectMessage>
+object representing the protocol message.
+
+Returns undef in either case if no URL parameters have been supplied
+(i.e., because B<args>() has not been initialized) or if the request
+is not an actual OpenID message.
+
+=item $csr->B<err>
+
+Returns the last error, in form "errcode: errtext",
+as set by the various handlers below.
+
+=item $csr->B<errcode>
+
+Returns the last error code.
+
+=item $csr->B<errtext>
+
+Returns the last error text.
+
+=item $csr->B<json_err>
+
+Returns the last error code/text in JSON format.
+
+=back
+
+=head2 Configuration
 
 =over 4
 
@@ -1120,29 +1309,34 @@ method descriptions below.
 
 =item $csr->B<ua>
 
-Getter/setter for the LWP::UserAgent (or subclass) instance which will
-be used when web donwloads are needed.  It's highly recommended that
-you use LWPx::ParanoidAgent, or at least read its documentation so
-you're aware of why you should care.
+Getter/setter for the L<LWP::UserAgent|LWP::UserAgent> (or subclass)
+instance which will be used when direct HTTP requests to a provider are needed.
+It's highly recommended that you use
+L<LWPx::ParanoidAgent|LWPx::ParanoidAgent>, or at least read its
+documentation so you're aware of why you should care.
 
 =item $csr->B<cache>($cache)
 
 =item $csr->B<cache>
 
-Getter/setter for the optional (but recommended!) cache instance you
-want to use for storing fetched parts of pages.  (identity server
-public keys, and the E<lt>headE<gt> section of user's HTML pages)
+Getter/setter for the cache instance which is used for storing fetched
+HTML or XRDS pages and keys for associations with identity providers.
 
 The $cache object can be anything that has a -E<gt>get($key) and
--E<gt>set($key,$value) methods.  See L<URI::Fetch> for more
-information.  This cache object is just passed to L<URI::Fetch>
-directly.
+-E<gt>set($key,$value[,$expire]) methods.  See L<URI::Fetch> for more
+information.  This cache object is passed to L<URI::Fetch|URI::Fetch> directly.
 
-=item $nos->B<consumer_secret>($scalar)
+Setting a cache instance is not absolutely required,
+But without it, provider associations will not be possible and
+the same pages may be fetched multiple times during discovery.
+B<It will also not be possible to check for repetition of the
+response_nonce, which may then leave you open to replay attacks.>
 
-=item $nos->B<consumer_secret>($code)
+=item $csr->B<consumer_secret>($scalar)
 
-=item $code = $nos->B<consumer_secret>; ($secret) = $code->($time);
+=item $csr->B<consumer_secret>($code)
+
+ $code = $csr->B<consumer_secret>; ($secret) = $code->($time);
 
 The consumer secret is used to generate self-signed nonces for the
 return_to URL, to prevent spoofing.
@@ -1151,13 +1345,18 @@ In the simplest (and least secure) form, you configure a static secret
 value with a scalar.  If you use this method and change the scalar
 value, any outstanding requests from the last 30 seconds or so will fail.
 
-The more robust (but more complicated) form is to supply a subref that
-returns a secret based on the provided I<$time>, a unix timestamp.
-And if one doesn't exist for that time, create, store and return it
-(with appropriate locking so you never return different secrets for
-the same time.)
+You may also supply a subref that takes one argument, I<$time>,
+a unix timestamp and returns a secret.
 
 Your secret may not exceed 255 characters.
+
+For the best protection against replays and login cross-site request
+forgery, consumer_secret should additionally depend on something known
+to be specific to the client browser instance and not visible to an
+attacker.  If C<SSH_SESSION_ID> is available, you should use that.
+Otherwise you'll need to set a (Secure) cookie on the (HTTPS) page
+where the signin form appears in order to establish a pre-login
+session, then make sure to change this cookie upon successful login.
 
 =item $csr->B<minimum_version>(2)
 
@@ -1172,53 +1371,6 @@ In most cases you'll want to allow both 1.1 and 2.0 identifiers,
 which is the default. If you want, you can set this property to 1
 to make this behavior explicit.
 
-=item $csr->assoc_options(...)
-
-=item $csr->assoc_options
-
-Get or sets the hash of parameters that determine how associations
-with servers will be made.  Available options include
-
-=over 4
-
-=item assoc_type
-
-Association type, (default 'HMAC-SHA1')
-
-=item session_type
-
-Association session type, (default 'DH-SHA1')
-
-=item max_encrypt
-
-(default FALSE) Use best encryption available for protocol version
-for both session type and association type.
-This overrides C<session_type> and C<assoc_type>
-
-=item session_no_encrypt_https
-
-(default FALSE) Use an unencrypted session type if server is https
-This overrides C<max_encrypt> if both are set.
-
-=item allow_eavesdropping
-
-(default FALSE)  Because it is generally a bad idea, we abort
-assocations where an unencrypted session over a non-SSL
-connection is called for.  However the OpenID 1.1 specification
-technically allows this, so if that is what you really want,
-set this flag true.  Ignored under protocol version 2.
-
-=back
-
-=item $csr->B<message>($key)
-
-Obtain a value from the message contained in the request arguments
-with the given key. This can only be used to obtain core arguments,
-not extension arguments.
-
-Call this method without a C<$key> argument to get a L<Net::OpenID::IndirectMessage>
-object representing the message.
-
 =item $csr->B<args>($ref)
 
 =item $csr->B<args>($param)
@@ -1227,25 +1379,48 @@ object representing the message.
 
 Can be used in 1 of 3 ways:
 
-1. Setting the way which the Consumer instances obtains GET parameters:
+=over
 
-$csr->args( $reference )
+=item 1.
 
-Where $reference is either a HASH ref, a CODE ref, or a "request object".
-Currently recognized request objects include Apache, Apache::Request,
-Apache2::Request, Plack::Request, and CGI.
+Set the object from which URL parameter names and values are to be retrieved:
 
-If you pass in a CODE ref, it must, if given a single URL parameter
-name argument, return that parameter value B<and>, if given no arguments
-at all, return the full list of parameter names from the request.
+ $csr->args( $reference )
 
-If you pass in an Apache (Apache 1 RequestRec) object, you must not
-have already called $r->content as the consumer module will want to
-get the request arguments out of here in the case of a POST request.
+where C<$reference> is either
+an unblessed C<HASH> ref,
+a C<CODE> ref, or
+some kind of "request object" E<mdash> the latter being either a
+L<CGI|..::CGI>,
+L<Apache|..::Apache>,
+L<Apache::Request|Apache::Request>,
+L<Apache2::Request|Apache2::Request>, or
+L<Plack::Request|Plack::Request> object.
 
-2. Get a parameter:
+If you pass in a C<CODE> ref, it must,
 
-my $foo = $csr->args("foo");
+=over
+
+=item *
+
+given a single parameter name argument, return the corresponding parameter value, I<and>,
+
+=item *
+
+given no arguments at all, return the full list of parameter names from the request.
+
+=back
+
+If you pass in an L<Apache|..::Apache> (mod_perl 1.x interface) object
+and this is a POST request, you must I<not> have already called
+C<< $r->content >> as this routine will be making said call
+itself in order to extract the request parameters.
+
+=item 2.
+
+Get a parameter value:
+
+ my $foo = $csr->args("foo");
 
 When given an unblessed scalar, it retrieves the value.  It croaks if
 you haven't defined a way to get at the parameters.
@@ -1253,50 +1428,256 @@ you haven't defined a way to get at the parameters.
 Most callers should instead use the C<message> method above, which
 abstracts away the need to understand OpenID's message serialization.
 
-3. Get the getter:
+=item 3.
 
-my $code = $csr->args;
+Get the parameter getter:
 
-Without arguments, returns a subref that returns the value given a
-parameter name.
+ my $code = $csr->args;
+
+this being a subref that takes a parameter name and
+returns the corresponding value.
 
 Most callers should instead use the C<message> method above with no
 arguments, which returns an object from which extension attributes
 can be obtained by their documented namespace URI.
 
-=item $nos->B<required_root>($url_prefix)
+=back
 
-=item $url_prefix = $nos->B<required_root>
+=item $csr->B<required_root>($url_prefix)
 
-If provided, this is the required string that all return_to URLs must
-start with.  If it doesn't match, it'll be considered invalid (spoofed
-from another site)
+=item $csr->B<required_root>
+
+Gets or sets the string prefix that, if nonempty, all return_to URLs
+must start with.  Messages with return_to URLS that don't match will
+be considered invalid (spoofed from another site).
+
+=item $csr->B<assoc_options>(...)
+
+=item $csr->B<assoc_options>
+
+Get or sets the hash of parameters that determine how associations
+with identity providers will be made.  Available options include:
+
+=over 4
+
+=item C<assoc_type>
+
+Association type, (default 'HMAC-SHA1')
+
+=item C<session_type>
+
+Association session type, (default 'DH-SHA1')
+
+=item C<max_encrypt>
+
+(boolean)
+Use best encryption available for protocol version
+for both session type and association type.
+This overrides C<session_type> and C<assoc_type>
+
+=item C<session_no_encrypt_https>
+
+(boolean)
+Use an unencrypted session type if the ID provider URL scheme is C<https:>.
+This overrides C<max_encrypt> if both are set.
+
+=item C<allow_eavesdropping>
+
+(boolean)
+Because it is generally a bad idea, we abort assocations where an
+unencrypted session over a non-SSL connection is called for.
+However the OpenID 1.1 specification technically allows this,
+so if that is what you really want, set this flag true.
+Ignored under protocol version 2.
+
+=back
+
+=item $csr->B<nonce_options>(...)
+
+=item $csr->B<nonce_options>
+
+Gets or sets the hash of options for how response_nonce should be checked.
+
+In OpenID 2.0, response_nonce is sent by the identity provider as part
+of a positive identity assertion in order to help prevent replay
+attacks.  In the check_authentication phase, the provider is also
+required to not authenticate the same response_nonce twice.
+
+The relying party is strongly encouraged but not required to reject
+multiple occurrences of a nonce (which can matter if associations are
+in use and there is no check_authentication phase).  Relying party may
+also choose to reject a nonce on the basis of the timestamp being out
+of an acceptable range.
+
+Available options include:
+
+=over
+
+=item C<nocheck>
+
+(boolean)
+Skip response_nonce checking entirely.
+This overrides all other nonce_options.
+
+C<nocheck> is implied and is the only possibility if $csr->B<cache> is unset.
+
+=item C<lifetime>
+
+(integer)
+Cache entries for nonces will expire after this many seconds.
+
+Defaults to the value of C<window>, below.
+
+If C<lifetime> is zero or negative, expiration times will not be set
+at all; entries will expire as per the default behavior for your cache
+(or you will need to purge them via some separate process).
+
+If your cache implementation ignores the third argument on
+$entry->B<set>() calls (see L<Cache::Entry>), then this option
+has no effect beyond serving as a default for C<window>.
+
+=item C<ignoretime>
+
+(boolean)
+Do not do any checking of timestamps, i.e., only test whether nonce is in
+the cache.  This overrides all other nonce options except for C<lifetime>
+and C<nocheck>
+
+=item C<skew>
+
+(integer)
+Number of seconds that a provider clock can be ahead of ours before we
+deem it to be misconfigured.
+
+Default skew is 300 (5 minutes) or C<window/2>, if C<window> is
+specified and C<window/2> is smaller.
+
+(C<skew> is treated as 0 if set negative, but don't do that).
+
+Misconfiguration of the provider clock means its timestamps are not
+reliable, which then means there is no way to know whether or not the
+nonce could have been sent before the start of the cache window,
+which nullifies any obligation to detect multiply sent nonces.
+Conversely, if proper configuration can be assumed, then the timestamp
+value minus C<skew> will be the earliest possible time that we could
+have received a previous instance of this response_nonce, and if the
+cache is reliable about holding entries from that time forward, then
+(and only then) can one be certain that this is indeed the first instance.
+
+=item  C<start>
+
+(integer)
+Reject nonces where I<timestamp> minus C<skew> is earlier than C<start>
+(absolute seconds since the epoch; defaults is zero, i.e., midnight 1/1/1970 UTC)
+
+=item  C<window>
+
+(integer)
+Reject nonces where I<timestamp> minus C<skew> is more than C<window>
+seconds ago.  Zero or negative values of C<window> are treated as
+infinite (i.e., allow everything).
+
+If C<lifetime> is specified, C<window> defaults to that.
+If C<lifetime> is not specified, C<window> defaults to 1800 (30 minutes),
+adjusted upwards if C<skew> is specified and larger than the default skew.
+
+Values between 0 and C<skew> (causing all nonces to be rejected) and
+values greater than C<lifetime> (cache will fail to keep some nonces
+that are still within the window) are I<not> recommended.
+
+Ideally, C<window> should be the maximal reasonably expected transmission
+delay plus twice the C<skew>.
+
+=item C<timecop>
+
+(boolean)
+Reject nonces from The Future (i.e., timestamped more than
+C<skew> seconds from now).
+
+C<timecop> is most likely useful only for debugging.  Rejecting future
+nonces is neither required nor does it protect from anything since an
+attacker can retry the message once it has expired from our cache but
+is still within the time interval where we would not yet I<expect>
+that it could expire (this being the core problem with future nonces).
+It may be, however, be useful to have warnings about misconfigured
+provider clocks -- and hence about this insecurity -- at the cost of
+impairing interoperability (since this rejects messages that are
+otherwise allowed by the protocol), hence this option.
+
+=back
+
+In most cases it will be enough to either set C<nocheck> to dispense
+with response_nonce checking entirely because some other (better)
+method of preventing replay attacks (see B<consumer_secret>) has been
+implemented, or use C<lifetime> to declare/set the lifetime of cache
+entries for nonces whether because the default lifetime is
+unsatisfactory or because the cache implementation is incapable of
+setting individual expiration times.  All other options should default
+reasonably in these cases.
+
+Note that in order for the nonce check to be as reliable/secure as
+possible (i.e., block all instances of duplicate nonces from properly
+configured providers as defined by C<skew>, the best we can do),
+C<start> must be no earlier than the cache start time and the cache
+must be guaranteed to hold nonce entries for at least C<lifetime>
+seconds (though, to be sure, C<start> will not matter once your server
+has been running for C<lifetime> seconds).
+
+=back
+
+=head2 Performing Discovery
+
+=over
 
 =item $csr->B<claimed_identity>($url)
 
-Given a user-entered $url (which could be missing http://, or have
-extra whitespace, etc), returns either a Net::OpenID::ClaimedIdentity
-object, or undef on failure.
+Given a user-entered $url
+(which could be missing http://, or have extra whitespace, etc),
+converts it to canonical form,
+performs partial discovery to confirm that at least one provider endpoint exists,
+and returns a L<Net::OpenID::ClaimedIdentity|Net::OpenID::ClaimedIdentity>
+object, or, on failure of any of the above,
+returns undef and sets last error ($csr->B<err>).
 
-Note that this identity is NOT verified yet.  It's only who the user
-claims they are, but they could be lying.
+Note that the identity returned is I<not> verified yet.
+It's only who the user claims they are, but they could be lying.
 
-If this method returns undef, you can rely on the following errors
+If this method returns undef, you can rely on the following error
 codes (from $csr->B<errcode>) to decide what to present to the user:
 
 =over 8
 
-=item no_identity_server
+=item C<no_identity_server>
 
-=item empty_url
+No identity provider was found for this URL.
 
-=item bogus_url
+=item C<protocol_version_incorrect>
 
-=item no_head_tag
+You set B<minimum_version(2)> and all of the available providers are version 1.
 
-=item url_fetch_err
+=item C<empty_url>
+
+The URL provided was essentially an empty string.
+
+=item C<bogus_url>
+
+The URL provided was of the wrong scheme (not C<http:> or C<https:>).
+
+=item C<url_fetch_err, no_head_tag>
+
+No longer used.
 
 =back
+
+=back
+
+=head2 Handling Provider Responses
+
+The following routines are for handling a redirected provider response
+and assume that, among other things, $csr->B<args> has been properly
+populated with the URL parameters.
+
+=over
 
 =item $csr->B<handle_server_response>( %callbacks );
 
@@ -1312,31 +1693,50 @@ something different in each case.
 
 The available callbacks are:
 
-=over 8
+=over
 
-=item B<not_openid> - the request isn't an OpenID response after all.
+=item C<not_openid>
 
-=item B<setup_needed>() - a checkid_immediate mode request was rejected, indicating that the provider requires user interaction.
+the request isn't an OpenID response after all.
 
-=item B<cancelled> - the user cancelled the authentication request from the provider's UI.
+=item C<setup_needed>
 
-=item B<verified>($verified_identity) - the user's identity has been successfully verified. A L<Net::OpenID::VerifiedIdentity> object is passed in.
+a checkid_immediate mode request was rejected, indicating that the provider requires user interaction.
 
-=item B<error>($errcode, $errmsg) - an error has occured. An error code and message are provided.
+=item C<cancelled>
+
+the user cancelled the authentication request from the provider's UI.
+
+=item C<verified ($verified_identity)>
+
+the user's identity has been successfully verified.
+A L<Net::OpenID::VerifiedIdentity|Net::OpenID::VerifiedIdentity> object is passed in.
+
+=item C<error ($errcode, $errmsg)>
+
+an error has occured. An error code and message are provided.
 
 =back
 
 For the sake of legacy code we also allow
 
-=over 8
+=over
 
-=item B<setup_required>($setup_url) - [DEPRECATED] a checkid_immediate mode request was rejected AND $setup_url was provided.
+=item C<setup_required ($setup_url)>
+
+B<[DEPRECATED]> a checkid_immediate mode request was rejected
+I<and> $setup_url was provided.
+
+Clients using this callback should be updated to use B<setup_needed>
+at the earliest opportunity.  Here $setup_url is the same as returned by
+$csr->B<user_setup_url>.
 
 =back
 
-however clients using this callback should be updated to use B<setup_needed>
-at the earliest opportunity.  Here $setup_url is the same as returned by
-B<user_setup_url>.
+=item $csr->B<is_server_response>
+
+Returns true if a set of URL parameters has been supplied (via $csr->B<args>)
+and constitutes an actual OpenID protocol message.
 
 =item $csr->B<setup_needed>
 
@@ -1363,7 +1763,7 @@ in particular even if it is supplied.
 =item $csr->B<user_setup_url>( [ %opts ] )
 
 (Version 1 only) Returns the URL the user must return to in order to
-login, setup trust, or do whatever the identity server needs them to
+login, setup trust, or do whatever the identity provider needs them to
 do in order to make the identity assertion which they previously
 initiated by entering their claimed identity URL.
 
@@ -1375,19 +1775,19 @@ under OpenID 2.0.  Use C<setup_needed()> instead.
 
 =back
 
-The base URL this this function returns can be modified by using the
+The base URL that this function returns can be modified by using the
 following options in %opts:
 
 =over
 
 =item C<post_grant>
 
-What you're asking the identity server to do with the user after they
+What you're asking the identity provider to do with the user after they
 setup trust.  Can be either C<return> or C<close> to return the user
 back to the return_to URL, or close the browser window with
 JavaScript.  If you don't specify, the behavior is undefined (probably
 the user gets a dead-end page with a link back to the return_to URL).
-In any case, the identity server can do whatever it wants, so don't
+In any case, the identity provider can do whatever it wants, so don't
 depend on this.
 
 =back
@@ -1404,9 +1804,10 @@ parameters that you'd sent along in your return_to URL.
 
 =item $csr->B<verified_identity>( [ %opts ] )
 
-Returns a Net::OpenID::VerifiedIdentity object, or undef.
+Returns a Net::OpenID::VerifiedIdentity object,
+or returns undef and sets last error ($csr->B<err>).
 Verification includes double-checking the reported identity URL
-declares the identity server, verifying the signature, etc.
+declares the identity provider, verifying the signature, etc.
 
 The options in %opts may contain:
 
@@ -1418,22 +1819,6 @@ Sets the required_root just for this request.  Values returns to its
 previous value afterwards.
 
 =back
-
-=item $csr->B<err>
-
-Returns the last error, in form "errcode: errtext"
-
-=item $csr->B<errcode>
-
-Returns the last error code.
-
-=item $csr->B<errtext>
-
-Returns the last error text.
-
-=item $csr->B<json_err>
-
-Returns the last error code/text in JSON format.
 
 =back
 
@@ -1465,7 +1850,7 @@ L<Net::OpenID::ClaimedIdentity> -- part of this module
 
 L<Net::OpenID::VerifiedIdentity> -- part of this module
 
-L<Net::OpenID::Server> -- another module, for acting like an OpenID server
+L<Net::OpenID::Server> -- another module, for implementing an OpenID identity provider/server
 
 =head1 AUTHORS
 

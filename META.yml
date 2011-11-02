@@ -28,4 +28,4 @@ resources:
   bugtracker: http://rt.cpan.org/NoAuth/Bugs.html?Dist=Net-OpenID-Consumer
   homepage: http://groups.google.com/group/openid-perl
   repository: git://github.com/robn/Net-OpenID-Consumer.git
-version: 1.100099_001
+version: 1.100099_002

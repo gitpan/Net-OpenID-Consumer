@@ -4,10 +4,10 @@ use Carp ();
 ############################################################################
 package Net::OpenID::Association;
 BEGIN {
-  $Net::OpenID::Association::VERSION = '1.100099_001';
+  $Net::OpenID::Association::VERSION = '1.100099_002';
 }
 use fields (
-            'server',    # author-identity identity server endpoint
+            'server',    # author-identity identity provider endpoint
             'secret',    # the secret for this association
             'handle',    # the 255-character-max ASCII printable handle (33-126)
             'expiry',    # unixtime, adjusted, of when this association expires
@@ -168,7 +168,7 @@ sub usable {
 
 # server_assoc(CSR, SERVER, FORCE_REASSOCIATE, OPTIONS...)
 #
-# Return an association for SERVER, whether already
+# Return an association for SERVER (provider), whether already
 # cached and not yet expired, or freshly negotiated.
 # Return undef if no local storage/cache is available
 # or negotiation fails for whatever reason,
@@ -224,7 +224,7 @@ sub server_assoc {
 
 # new_server_assoc(CSR, SERVER, OPTIONS...)
 #
-# Attempts to negotiate a fresh association from C<$server>
+# Attempts to negotiate a fresh association from C<$server> (provider)
 # with session and association types determined by OPTIONS...
 # (accepts protocol_version and all assoc_options from Consumer,
 #  however max_encrypt and session_no_encrypt_https are ignored
@@ -232,7 +232,7 @@ sub server_assoc {
 # Returns
 #   ($association) on success
 #   (undef, $error_message) on unrecoverable failure
-#   (undef, undef, {retry...}) if server suggested
+#   (undef, undef, {retry...}) if identity provider suggested
 #     alternate session/assoc types in an error response
 #
 sub new_server_assoc {
@@ -336,7 +336,7 @@ sub new_server_assoc {
             my $expiry = OpenID::util::w3c_to_time($args{'expiry'});
             my $replace_after = OpenID::util::w3c_to_time($args{'replace_after'});
 
-            # seconds ahead (positive) or behind (negative) the server is
+            # seconds ahead (positive) or behind (negative) the provider is
             $expires_in = ($replace_after || $expiry) - $issued;
         }
     }
@@ -408,11 +408,11 @@ __END__
 
 =head1 NAME
 
-Net::OpenID::Association - A relationship with an identity server
+Net::OpenID::Association - A relationship with an identity provider
 
 =head1 VERSION
 
-version 1.100099_001
+version 1.100099_002
 
 =head1 DESCRIPTION
 
