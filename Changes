@@ -1,4 +1,28 @@
+1.11      Nov 04 2011
+
+    * Added POD section on Error Codes
+
+    * Fixed bug that could cause VerifiedIdentity->signed_fields
+      to be spuriously set to an empty hash
+
+    * Fixed bug where _discover_acceptable_endpoints force_version => 1
+      could return version 2 endpoints.
+
 1.100099_002 Nov 02 2011
+
+    * We now do actual checking of responce_nonce (closes #44767).
+
+      Behavior is customizable using Consumer->nonce_options.
+      You may want to set 'start' to your (cache/HTTP) server start time.
+      The defaults will otherwise do the Right Thing if your cache
+      implementation pays attention to the 3rd (expiration)
+      argument to set() and can reliably hold onto entries for a
+      half hour; otherwise this may need some attention.
+
+      Likewise if you already have better protection against
+      replays, in which case you'll want to turn this off.
+
+    * Lots of POD fixes
 
 1.100099_001 Oct 25 2011
 
@@ -67,7 +91,10 @@
     * Fix handle_server_response unknown callback error message -- close #58368
 
     * Handle version 2.0 associations and all session/association types.
+
       This is customizable using Consumer->assoc_options.
+      Most likely you will want to just set 'max_encrypt' and
+      'session_no_encrypt_https' true and forget about it.
 
     * Fix bug in handling of sreg extension under 2.0
       that prevented certain other extensions from being recognized.

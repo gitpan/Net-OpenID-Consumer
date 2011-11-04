@@ -39,7 +39,7 @@
          }
       }
    },
-   "release_status" : "testing",
+   "release_status" : "stable",
    "resources" : {
       "bugtracker" : {
          "mailto" : "bug-net-openid-consumer@rt.cpan.org",
@@ -48,10 +48,10 @@
       "homepage" : "http://groups.google.com/group/openid-perl",
       "repository" : {
          "type" : "git",
-         "url" : "git://github.com/robn/Net-OpenID-Consumer.git",
-         "web" : "http://github.com/robn/Net-OpenID-Consumer"
+         "url" : "git://github.com/wrog/Net-OpenID-Consumer.git",
+         "web" : "http://github.com/wrog/Net-OpenID-Consumer"
       }
    },
-   "version" : "1.100099_002"
+   "version" : "1.11"
 }
 
