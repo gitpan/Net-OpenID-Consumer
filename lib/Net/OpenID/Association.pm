@@ -4,7 +4,7 @@ use Carp ();
 ############################################################################
 package Net::OpenID::Association;
 BEGIN {
-  $Net::OpenID::Association::VERSION = '1.11';
+  $Net::OpenID::Association::VERSION = '1.12';
 }
 use fields (
             'server',    # author-identity identity provider endpoint
@@ -412,7 +412,7 @@ Net::OpenID::Association - A relationship with an identity provider
 
 =head1 VERSION
 
-version 1.11
+version 1.12
 
 =head1 DESCRIPTION
 

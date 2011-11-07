@@ -11,9 +11,6 @@ lib/Net/OpenID/Association.pm
 lib/Net/OpenID/ClaimedIdentity.pm
 lib/Net/OpenID/Consumer.pm
 lib/Net/OpenID/VerifiedIdentity.pm
-notes/#protocol#
-notes/protocol
-notes/yadis
 t/00-use.t
 t/01-misc.t
 t/02-canonical.t
@@ -22,4 +19,3 @@ t/04-handler.t
 t/lib/FakeFetch.pm
 xt/03-providers.t
 xt/04-handler.t
-xt/ignore/01-synopsis.t.~1~
