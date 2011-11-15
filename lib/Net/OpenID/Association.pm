@@ -4,7 +4,7 @@ use Carp ();
 ############################################################################
 package Net::OpenID::Association;
 BEGIN {
-  $Net::OpenID::Association::VERSION = '1.12';
+  $Net::OpenID::Association::VERSION = '1.13';
 }
 use fields (
             'server',    # author-identity identity provider endpoint
@@ -412,7 +412,7 @@ Net::OpenID::Association - A relationship with an identity provider
 
 =head1 VERSION
 
-version 1.12
+version 1.13
 
 =head1 DESCRIPTION
 
@@ -420,7 +420,7 @@ Internal class.
 
 =head1 COPYRIGHT, WARRANTY, AUTHOR
 
-See L<Net::OpenID::Consumer> for author, copyrignt and licensing information.
+See L<Net::OpenID::Consumer> for author, copyright and licensing information.
 
 =head1 SEE ALSO
 
@@ -430,4 +430,4 @@ L<Net::OpenID::VerifiedIdentity>
 
 L<Net::OpenID::Server>
 
-Website:  L<http://www.danga.com/openid/>
+Website:  L<http://openid.net/>

@@ -6,7 +6,7 @@ use Carp ();
 ############################################################################
 package Net::OpenID::Consumer;
 BEGIN {
-  $Net::OpenID::Consumer::VERSION = '1.12';
+  $Net::OpenID::Consumer::VERSION = '1.13';
 }
 
 
@@ -1152,7 +1152,7 @@ Net::OpenID::Consumer - Library for consumers of OpenID identities
 
 =head1 VERSION
 
-version 1.12
+version 1.13
 
 =head1 SYNOPSIS
 
@@ -1939,6 +1939,59 @@ This is the complete list of error codes that can be set.  Errors marked with (C
 
 =back
 
+=head1 PROTOCOL VARIANCES
+
+XRI-based identities are not supported.
+
+Meanwhile, here are answers to the security profile questions from L<section 15.6 of the OpenID 2.0 specification|http://openid.net/specs/openid-authentication-2_0.html#anchor47> that are relevant to the Consumer/Relying-Party:
+
+=over
+
+=item 1.
+
+I<Are wildcards allowed in realms?>
+B<Yes.>
+
+=item 2.
+
+N/A.
+
+=item 3.
+
+I<Types of claimed identifiers accepted.>
+B<HTTP or HTTPS>
+
+=item 4.
+
+I<Are self-issued certificates allowed for authentication?>
+B<Depends entirely on the user agent (C<ua>) supplied.  L<LWP::UserAgent|LWP::UserAgent>, as of version 6.0, can be configured to only accept connections to sites with certificates deriving from a set of trusted roots.>
+
+=item 5.
+
+I<Must the XRDS file be signed?>  B<No.>
+
+=item 6.
+
+I<Must the XRDS file be retrieved over secure channel?>  B<No.>
+
+=item 7.
+
+I<What types of session types can be used when creating associations?>  B<Any of C<no-encryption>,C<DH-SHA1>,C<DH-SHA256>>
+
+=item 8.
+
+N/A.
+
+=item 9.
+
+N/A.
+
+=item 10.
+
+I<Must the association request take place over a secure channel?>  B<If the session type is C<no-encryption>, then Yes for version 2.0 providers and likewise for version 1.1 providers if C<allow_eavesdropping> is not set, otherwise No.>
+
+=back
+
 =head1 COPYRIGHT
 
 This module is Copyright (c) 2005 Brad Fitzpatrick.
@@ -1957,11 +2010,11 @@ This is free software. IT COMES WITHOUT WARRANTY OF ANY KIND.
 
 The Net::OpenID family of modules has a mailing list powered
 by Google Groups. For more information, see
-http://groups.google.com/group/openid-perl .
+L<http://groups.google.com/group/openid-perl>.
 
 =head1 SEE ALSO
 
-OpenID website: http://openid.net/
+OpenID website: L<http://openid.net/>
 
 L<Net::OpenID::ClaimedIdentity> -- part of this module
 
