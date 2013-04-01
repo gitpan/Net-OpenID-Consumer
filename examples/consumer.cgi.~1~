@@ -157,6 +157,7 @@ sub handle_callback {
         # since we have delayed_return == 1 above
         # covering the setup_needed case is not actually necessary
         setup_needed => sub {
+<<<<<<< Updated upstream
             # this might be version 1.1 and setup_url may have been
             # been provided, in which case we could redirect
             if ($consumer->message->protocol_version < 2) {
@@ -167,6 +168,11 @@ sub handle_callback {
 
             return [ 200, [ 'Content-Type' => 'text/plain', ],
                      [ 'You must login with your provider first.' ] ];
+=======
+            return [ 200, [ 'Content-Type' => 'text/plain', ], 
+                     [ 'You must login with your provider first.' ] ];
+            # return [ 301, [ Location => $self->user_setup_url ], [] ];
+>>>>>>> Stashed changes
         },
 
         # cancelled is called when the OP informs us that the user cancelled
@@ -219,6 +225,7 @@ sub _get_openid_context {
         # example of this)
         ua              => LWP::UserAgent->new,
 
+<<<<<<< Updated upstream
         # args can take a number of different objects that may contain
         # the request parameters from the browser, eg a CGI,
         # Apache::Request, Apache2::Request or similar (see the
@@ -230,6 +237,16 @@ sub _get_openid_context {
         # list of parameter names should be returned
 
         args            => sub { @_ ? $params->{+shift} : keys %$params },
+=======
+        # args can take a number of different objects that may contain the
+        # request parameters from the browser, eg a CGI, Apache::Request,
+        # Apache2::Request or similar (see the documentation for more). if a
+        # coderef is provided (as is the case here), it will be passed a
+        # single argument containing the wanted parameter (and should return
+        # the value of that parameter or undef if its not available) or no
+        # arguments indicating a list of all parameters should be returned
+        args => sub { if (@_) { $params->{+shift}} else keys %{$params} },
+>>>>>>> Stashed changes
 
         # consumer_secret takes a coderef that is called to generate the
         # "nonce" value for the return_to uri. it is passed a single argument

@@ -5,9 +5,6 @@ use Carp ();
 
 ############################################################################
 package Net::OpenID::Consumer;
-BEGIN {
-  $Net::OpenID::Consumer::VERSION = '1.14';
-}
 
 
 use fields (
@@ -41,7 +38,7 @@ use HTTP::Request;
 use LWP::UserAgent;
 use Storable;
 use JSON qw(encode_json);
-use URI::Escape qw(uri_escape_utf8);
+use URI::Escape qw(uri_escape);
 use HTML::Parser;
 
 sub new {
@@ -897,8 +894,7 @@ sub verified_identity {
 
     my $assoc_handle = $self->message("assoc_handle");
 
-    $self->_debug("verified_identity: assoc_handle" .
-		  ($assoc_handle ? ": $assoc_handle" : " missing"));
+    $self->_debug("verified_identity: assoc_handle: $assoc_handle");
     my $assoc = Net::OpenID::Association::handle_assoc($self, $server, $assoc_handle);
 
     my @signed_fields = grep {m/^[\w\.]+$/} split(/,/, $signed);
@@ -977,10 +973,11 @@ sub verified_identity {
 
         my $req = HTTP::Request->new(POST => $server);
         $req->header("Content-Type" => "application/x-www-form-urlencoded");
-        $req->content(join("&", map { "$_=" . uri_escape_utf8($post{$_}) } keys %post));
+        $req->content(join("&", map { "$_=" . uri_escape($post{$_}) } keys %post));
 
         my $ua  = $self->ua;
         my $res = $ua->request($req);
+
         return $self->_fail("naive_verify_failed_network")
           unless $res && $res->is_success;
 
@@ -1150,10 +1147,6 @@ __END__
 
 Net::OpenID::Consumer - Library for consumers of OpenID identities
 
-=head1 VERSION
-
-version 1.14
-
 =head1 SYNOPSIS
 
   use Net::OpenID::Consumer;
@@ -1209,12 +1202,8 @@ version 1.14
           die "Not an OpenID message";
       },
       setup_needed => sub {
-          if ($csr->message->protocol_version >= 2) {
-              # (OpenID 2) retry request in checkid_setup mode (above)
-          }
-          else {
-              # (OpenID 1) redirect user to $csr->user_setup_url
-          }
+          # (OpenID 2) retry request in checkid_setup mode
+          # (OpenID 1) redirect user to $csr->user_setup_url
       },
       cancelled => sub {
           # User hit cancel; restore application state prior to check_url
@@ -1293,12 +1282,7 @@ This can only be used to obtain core OpenID fields not extension fields.
 
 Calling this method without a C<$key> argument returns a
 L<Net::OpenID::IndirectMessage|Net::OpenID::IndirectMessage>
-object representing the protocol message, at which point the
-various object methods are available, including
-
- $csr->message->protocol_version
- $csr->message->has_ext
- $csr->message->get_ext
+object representing the protocol message.
 
 Returns undef in either case if no URL parameters have been supplied
 (i.e., because B<args>() has not been initialized) or if the request

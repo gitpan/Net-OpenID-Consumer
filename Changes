@@ -1,3 +1,11 @@
+1.14      Apr 01 2013
+
+1.14      Apr 01 2013
+
+    * Fix uri_escape'ing of UTF-8 attributes (closes #80329)
+
+    * documentation fixes and updated consumer.cgi example (closes #74101)
+
 1.13      Nov 14 2011
 
 1.12      Nov 06 2011
