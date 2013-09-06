@@ -1,4 +1,7 @@
-1.14      Apr 01 2013
+1.15      Sep 06 2013
+
+    * Require Net-OpenID-Common 1.18
+      in order to pick up patched Crypt::DH::GMP 0.00011 (closes #88460)
 
 1.14      Apr 01 2013
 
@@ -99,7 +102,7 @@
   ---------------
 
     * Handle 2.0 provider-specific 'error' mode responses.
-      These currently show up in the 'error' callback 
+      These currently show up in the 'error' callback
       (errcode == 'provider_error');
 
     * Remove dependency in ordering of minimum_version() and args()

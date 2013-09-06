@@ -5,7 +5,7 @@
       "Roger Crew <crew@cs.stanford.edu>"
    ],
    "dynamic_config" : 0,
-   "generated_by" : "Dist::Zilla version 4.101900, CPAN::Meta::Converter version 2.101670",
+   "generated_by" : "Dist::Zilla version 4.300020, CPAN::Meta::Converter version 2.120921",
    "license" : [
       "perl_5"
    ],
@@ -17,25 +17,25 @@
    "prereqs" : {
       "configure" : {
          "requires" : {
-            "ExtUtils::MakeMaker" : "6.31"
+            "ExtUtils::MakeMaker" : "6.30"
          }
       },
       "runtime" : {
          "requires" : {
-            "Digest::SHA" : 0,
-            "HTTP::Request" : 0,
-            "JSON" : 0,
-            "LWP::UserAgent" : 0,
-            "MIME::Base64" : 0,
-            "Net::OpenID::Common" : "1.13",
-            "Storable" : 0,
-            "Time::Local" : 0,
-            "URI" : 0
+            "Digest::SHA" : "0",
+            "HTTP::Request" : "0",
+            "JSON" : "0",
+            "LWP::UserAgent" : "0",
+            "MIME::Base64" : "0",
+            "Net::OpenID::Common" : "1.18",
+            "Storable" : "0",
+            "Time::Local" : "0",
+            "URI" : "0"
          }
       },
       "test" : {
          "requires" : {
-            "Test::More" : 0
+            "Test::More" : "0"
          }
       }
    },
@@ -52,6 +52,6 @@
          "web" : "http://github.com/wrog/Net-OpenID-Consumer"
       }
    },
-   "version" : "1.14"
+   "version" : "1.15"
 }
 

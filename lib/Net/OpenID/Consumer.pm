@@ -5,8 +5,8 @@ use Carp ();
 
 ############################################################################
 package Net::OpenID::Consumer;
-BEGIN {
-  $Net::OpenID::Consumer::VERSION = '1.14';
+{
+  $Net::OpenID::Consumer::VERSION = '1.15';
 }
 
 
@@ -1152,7 +1152,7 @@ Net::OpenID::Consumer - Library for consumers of OpenID identities
 
 =head1 VERSION
 
-version 1.14
+version 1.15
 
 =head1 SYNOPSIS
 

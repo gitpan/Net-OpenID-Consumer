@@ -21,5 +21,6 @@ t/03-seminfo.t
 t/04-handler.t
 t/99-rt80329.t
 t/lib/FakeFetch.pm
+t/release-pod-syntax.t
 xt/03-providers.t
 xt/04-handler.t
