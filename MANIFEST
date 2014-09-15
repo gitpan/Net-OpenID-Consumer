@@ -7,12 +7,9 @@ META.yml
 Makefile.PL
 README
 examples/consumer.cgi
-examples/consumer.cgi.~1~
 lib/Net/OpenID/Association.pm
 lib/Net/OpenID/ClaimedIdentity.pm
-lib/Net/OpenID/ClaimedIdentity.pm.~1~
 lib/Net/OpenID/Consumer.pm
-lib/Net/OpenID/Consumer.pm.~1~
 lib/Net/OpenID/VerifiedIdentity.pm
 t/00-use.t
 t/01-misc.t

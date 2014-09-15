@@ -4,7 +4,7 @@ use Carp ();
 ############################################################################
 package Net::OpenID::Association;
 {
-  $Net::OpenID::Association::VERSION = '1.15';
+  $Net::OpenID::Association::VERSION = '1.16';
 }
 use fields (
             'server',    # author-identity identity provider endpoint
@@ -24,7 +24,7 @@ use URI::Escape qw(uri_escape);
 
 # session type hash
 #    name  - by which session type appears in URI parameters (required)
-#    len   - number of bytes in digest (undef => accomodates any length)
+#    len   - number of bytes in digest (undef => accommodates any length)
 #    fn    - DH hash function (undef => secret passed in the clear)
 #    https - must use encrypted connection (boolean)
 #
@@ -412,7 +412,7 @@ Net::OpenID::Association - A relationship with an identity provider
 
 =head1 VERSION
 
-version 1.15
+version 1.16
 
 =head1 DESCRIPTION
 

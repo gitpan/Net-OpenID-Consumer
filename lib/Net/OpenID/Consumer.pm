@@ -6,7 +6,7 @@ use Carp ();
 ############################################################################
 package Net::OpenID::Consumer;
 {
-  $Net::OpenID::Consumer::VERSION = '1.15';
+  $Net::OpenID::Consumer::VERSION = '1.16';
 }
 
 
@@ -1152,7 +1152,7 @@ Net::OpenID::Consumer - Library for consumers of OpenID identities
 
 =head1 VERSION
 
-version 1.15
+version 1.16
 
 =head1 SYNOPSIS
 
@@ -1508,7 +1508,7 @@ This overrides C<max_encrypt> if both are set.
 =item C<allow_eavesdropping>
 
 (boolean)
-Because it is generally a bad idea, we abort assocations where an
+Because it is generally a bad idea, we abort associations where an
 unencrypted session over a non-SSL connection is called for.
 However the OpenID 1.1 specification technically allows this,
 so if that is what you really want, set this flag true.
@@ -1720,7 +1720,7 @@ A L<Net::OpenID::VerifiedIdentity|Net::OpenID::VerifiedIdentity> object is passe
 
 =item C<error ($errcode, $errmsg)>
 
-an error has occured. An error code and message are provided.
+an error has occurred. An error code and message are provided.
 See L<Error Codes|/ERROR CODES> below for the meanings of the codes.
 
 =back
@@ -1842,7 +1842,7 @@ This is the complete list of error codes that can be set.  Errors marked with (C
 
 =item C<provider_error>
 
-(A) The protocol message is a (2.0) error mode (i.e., C<openid.mode = 'error'>) message, typically used for provider-specific error reponses.  Use $csr->B<message> to get at the C<contact> and C<reference> fields.
+(A) The protocol message is a (2.0) error mode (i.e., C<openid.mode = 'error'>) message, typically used for provider-specific error responses.  Use $csr->B<message> to get at the C<contact> and C<reference> fields.
 
 =item C<empty_url>
 

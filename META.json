@@ -27,7 +27,7 @@
             "JSON" : "0",
             "LWP::UserAgent" : "0",
             "MIME::Base64" : "0",
-            "Net::OpenID::Common" : "1.18",
+            "Net::OpenID::Common" : "1.19",
             "Storable" : "0",
             "Time::Local" : "0",
             "URI" : "0"
@@ -52,6 +52,6 @@
          "web" : "http://github.com/wrog/Net-OpenID-Consumer"
       }
    },
-   "version" : "1.15"
+   "version" : "1.16"
 }
 
